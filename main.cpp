@@ -80,11 +80,16 @@ public:
     double radius;
     Vector albedo;
     bool mirror;
-    explicit Sphere(Vector o, double R, Vector c, bool mirror = false){
+    explicit Sphere(Vector o, double R, Vector c){
         origin = o;
         radius = R;
         albedo = c;
-        mirror = mirror;
+        if (c.data[0] == -1){
+            mirror = true;
+        }
+        else{
+            mirror = false;
+        }
     }
     Intersection intersect(Ray &r){
         Vector omc = r.origin - origin;
@@ -154,12 +159,16 @@ Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr){
     Vector color;
     Cast cast = scene_intersect(Scene, pr);
     if (cast.intersect.flag == true){
-        Vector albedo = (*cast.sphere).albedo;
         Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
         sphere_normal.normalize();
+        Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
+        if (cast.sphere->mirror){
+            return get_color(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dot(pr.unit, sphere_normal) * sphere_normal));
+        }
+        Vector albedo = (*cast.sphere).albedo;
+
         for (int k=0; k<Lights.size(); k++){
             // First test if there is a shadow
-            Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
             Vector to_shadow = Lights[k].position - epsilon_above;
             Ray shadow_ray = Ray(epsilon_above, to_shadow);
             Cast shadow_intersection = scene_intersect(Scene, shadow_ray);
@@ -174,12 +183,15 @@ Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr){
 }
 
 int main(){
-    std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),
-                                Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),
-                                Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),
-                                Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),
-                                Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),
-                                Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0))};
+    Vector mirror_vect = Vector(-1, -1, -1);
+    std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),        // center ball
+                                Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
+                                Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
+                                Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
+                                Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
+                                Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0)),      // small yellow
+                                Sphere(Vector(-15, 5, -5), 4, mirror_vect)              // left mirror
+                                };
     std::vector<Light> Lights{{Vector(-10, 20, 40), 7*10000000}, {Vector(15, 0, -5), 6*1000000}};
     
 
