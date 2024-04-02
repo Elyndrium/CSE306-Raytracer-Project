@@ -79,10 +79,12 @@ public:
     Vector origin;
     double radius;
     Vector albedo;
-    explicit Sphere(Vector o, double R, Vector c){
+    bool mirror;
+    explicit Sphere(Vector o, double R, Vector c, bool mirror = false){
         origin = o;
         radius = R;
         albedo = c;
+        mirror = mirror;
     }
     Intersection intersect(Ray &r){
         Vector omc = r.origin - origin;
@@ -148,16 +150,37 @@ void gamma_correction(Vector& color){
     color[2] = std::min((double)255, std::max((double)0, pow(color[2], 1/2.2)));
 }
 
-int main() {
+Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr){
+    Vector color;
+    Cast cast = scene_intersect(Scene, pr);
+    if (cast.intersect.flag == true){
+        Vector albedo = (*cast.sphere).albedo;
+        Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
+        sphere_normal.normalize();
+        for (int k=0; k<Lights.size(); k++){
+            // First test if there is a shadow
+            Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
+            Vector to_shadow = Lights[k].position - epsilon_above;
+            Ray shadow_ray = Ray(epsilon_above, to_shadow);
+            Cast shadow_intersection = scene_intersect(Scene, shadow_ray);
+            if (!shadow_intersection.intersect.flag | to_shadow.norm2() < (epsilon_above - shadow_intersection.intersect.position).norm2()){
+                // Then add the light to the pixel
+                Vector to_light = Lights[k].position - cast.intersect.position;
+                color = color + ((Lights[k].intensity/(4*PI*(to_light).norm2())) * (albedo/PI) * std::max((double)0, dot(sphere_normal, to_light/to_light.norm())));
+            }
+        }
+    }
+    return color;
+}
+
+int main(){
     std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),
                                 Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),
                                 Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),
                                 Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),
-                                Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27))};
+                                Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),
+                                Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0))};
     std::vector<Light> Lights{{Vector(-10, 20, 40), 7*10000000}, {Vector(15, 0, -5), 6*1000000}};
-    for (int k=0; k<Lights.size(); k++){
-        Scene.push_back(Sphere(Lights[k].position+Vector(0, 5, 0), 3, Vector(255, 255, 0)));
-    }
     
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
@@ -171,27 +194,8 @@ int main() {
         for (int j = 0; j < W; j++) {
             Ray pr = pixel_ray(W, H, i, j);
             Vector color = Vector(0,0,0);
-            Cast cast = scene_intersect(Scene, pr);
-            if (cast.intersect.flag == true){
-                Vector albedo = (*cast.sphere).albedo;
-                Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
-                sphere_normal.normalize();
-                for (int k=0; k<Lights.size(); k++){
-                    // First test if there is a shadow
-                    Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
-                    Vector to_shadow = Lights[k].position - epsilon_above;
-                    double distance_to_light = to_shadow.norm2();
-                    to_shadow.normalize();
-                    Ray shadow_ray = Ray(epsilon_above, to_shadow);
-                    Cast shadow_intersection = scene_intersect(Scene, shadow_ray);
-                    if (!shadow_intersection.intersect.flag | distance_to_light < (epsilon_above - shadow_intersection.intersect.position).norm2()){
-                        // Then add the light to the pixel
-                        Vector to_light = Lights[k].position - cast.intersect.position;
-                        color = color + ((Lights[k].intensity/(4*PI*(to_light).norm2())) * (albedo/PI) * std::max((double)0, dot(sphere_normal, to_light/to_light.norm())));
-                    }
-                }
-            }
-
+            color = get_color(Scene, Lights, pr);
+            
             //std::cout << color[0] << " " << color[1] << " " << color[2] << std::endl;
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
@@ -199,6 +203,7 @@ int main() {
             image[(i * W + j) * 3 + 2] = color.data[2];
         }
     }
+    
 
     stbi_write_png("image.png", W, H, 3, &image[0], 0);
  
