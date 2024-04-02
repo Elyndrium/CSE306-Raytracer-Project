@@ -155,15 +155,15 @@ void gamma_correction(Vector& color){
     color[2] = std::min((double)255, std::max((double)0, pow(color[2], 1/2.2)));
 }
 
-Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr){
+Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, int mirror_depth = 10){
     Vector color;
     Cast cast = scene_intersect(Scene, pr);
     if (cast.intersect.flag == true){
         Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
         sphere_normal.normalize();
         Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
-        if (cast.sphere->mirror){
-            return get_color(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dot(pr.unit, sphere_normal) * sphere_normal));
+        if (cast.sphere->mirror & mirror_depth>0){
+            return get_color(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dot(pr.unit, sphere_normal) * sphere_normal), mirror_depth-1);
         }
         Vector albedo = (*cast.sphere).albedo;
 
