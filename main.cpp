@@ -190,7 +190,7 @@ int main(){
                                 Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
                                 Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
                                 Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0)),      // small yellow
-                                Sphere(Vector(-15, 5, -5), 4, mirror_vect)              // left mirror
+                                Sphere(Vector(-20, 21, -13), 10, mirror_vect)              // left mirror
                                 };
     std::vector<Light> Lights{{Vector(-10, 20, 40), 7*10000000}, {Vector(15, 0, -5), 6*1000000}};
     
