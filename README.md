@@ -1,7 +1,6 @@
 # CSE306 Raytracer Project
  Coding a simple raytracer in C++
 
-Shadows, mirrors done
+Shadows, mirrors done, transparency too (no fresnel)
 
-TODO:
-Transparent
+TD2 TODO

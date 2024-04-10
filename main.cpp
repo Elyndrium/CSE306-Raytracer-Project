@@ -41,6 +41,9 @@ Vector operator+(const Vector& a, const Vector& b) {
 Vector operator-(const Vector& a, const Vector& b) {
     return Vector(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 }
+Vector operator-(const Vector& a){
+    return Vector(-a[0], -a[1], -a[2]);
+}
 Vector operator*(const double a, const Vector& b) {
     return Vector(a*b[0], a*b[1], a*b[2]);
 }
@@ -72,7 +75,12 @@ struct Intersection {
     bool flag;
     Vector position;
     double t;
+    bool inside;
 };
+
+Intersection make_intersection(bool flag, Vector position, double t, bool inside){
+    return {flag, position, t, inside};
+}
 
 class Sphere {
 public:
@@ -80,14 +88,23 @@ public:
     double radius;
     Vector albedo;
     bool mirror;
-    explicit Sphere(Vector o, double R, Vector c){
+    bool transp;
+    double refraction;
+    explicit Sphere(Vector o, double R, Vector c, double refr = -1){
         origin = o;
         radius = R;
         albedo = c;
-        if (c.data[0] == -1){
+        refraction = refr;
+        if (refraction == -1){
+            mirror = false;
+            transp = false;
+        }
+        else if (refraction == 0){
+            transp = false;
             mirror = true;
         }
         else{
+            transp = true;
             mirror = false;
         }
     }
@@ -95,17 +112,19 @@ public:
         Vector omc = r.origin - origin;
         double delta = pow(dot(r.unit, omc), 2) - (dot(omc, omc) - pow(radius, 2));
         if (delta<0){
-            return {false, r.origin, 0};
+            return make_intersection(false, r.origin, 0, false);
         }
         double sq_delta = sqrt(delta);
         double t = dot(r.unit, origin-r.origin) - sq_delta;
+        bool inside = false;
         if (t<0){
             t += 2*sq_delta;
             if (t<0){
-                return {false, r.origin, 0};
+                return make_intersection(false, r.origin, 0, false);
             }
+            inside = true;
         }
-        return {true, r.origin + r.unit*t, t};
+        return make_intersection(true, r.origin + r.unit*t, t, inside);
     }
 };
 
@@ -155,15 +174,42 @@ void gamma_correction(Vector& color){
     color[2] = std::min((double)255, std::max((double)0, pow(color[2], 1/2.2)));
 }
 
-Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, int mirror_depth = 10){
+Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, int reflections_depth = 20){
     Vector color;
     Cast cast = scene_intersect(Scene, pr);
+    double epsilon = 1.0/100000;
     if (cast.intersect.flag == true){
         Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
         sphere_normal.normalize();
-        Vector epsilon_above = cast.intersect.position + sphere_normal/100000;
-        if (cast.sphere->mirror & mirror_depth>0){
-            return get_color(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dot(pr.unit, sphere_normal) * sphere_normal), mirror_depth-1);
+        Vector normal_towards_ray = sphere_normal;
+        if (cast.intersect.inside == true){
+            normal_towards_ray = -sphere_normal;
+        }
+        double dotwin = dot(pr.unit, normal_towards_ray);
+        Vector epsilon_above = cast.intersect.position + normal_towards_ray * epsilon;
+        if (cast.sphere->mirror & reflections_depth>0){
+            return get_color(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1);
+        }
+        else if (cast.sphere->transp){
+            // We always assume the sphere is standing in air
+            Vector epsilon_after = cast.intersect.position - normal_towards_ray * epsilon;
+            double n1n2 = 1.0/cast.sphere->refraction;
+            if (cast.intersect.inside == true){
+                n1n2 = cast.sphere->refraction;
+            }
+            Vector tangential_dir = n1n2 * (pr.unit - dotwin * normal_towards_ray);
+            double in_sqrt = 1 - (pow(n1n2,2) * (1 - pow(dotwin,2)));
+            if (in_sqrt<0){
+                std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl;
+                cast.sphere->mirror = true;
+                cast.sphere->refraction = 0;
+                cast.sphere->transp = false;
+                return get_color(Scene, Lights, pr, reflections_depth);
+            }
+            Vector normal_dir = - normal_towards_ray * sqrt(in_sqrt);
+            Vector refracted_direction = tangential_dir + normal_dir;
+            Ray reflected_ray = Ray(epsilon_after, refracted_direction); // TODO change
+            return get_color(Scene, Lights, reflected_ray, reflections_depth-1);
         }
         Vector albedo = (*cast.sphere).albedo;
 
@@ -175,7 +221,7 @@ Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, i
             if (!shadow_intersection.intersect.flag | to_shadow.norm2() < (epsilon_above - shadow_intersection.intersect.position).norm2()){
                 // Then add the light to the pixel
                 Vector to_light = Lights[k].position - cast.intersect.position;
-                color = color + ((Lights[k].intensity/(4*PI*(to_light).norm2())) * (albedo/PI) * std::max((double)0, dot(sphere_normal, to_light/to_light.norm())));
+                color = color + ((Lights[k].intensity/(4*PI*(to_light).norm2())) * (albedo/PI) * std::max((double)0, dot(normal_towards_ray, to_light/to_light.norm())));
             }
         }
     }
@@ -183,14 +229,17 @@ Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, i
 }
 
 int main(){
-    Vector mirror_vect = Vector(-1, -1, -1);
+    Vector empty_vec = Vector(-1, -1, -1);
     std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),        // center ball
                                 Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
                                 Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
                                 Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
+                                Sphere(Vector(1000, 0, 0), 940, Vector(255, 0, 255)),   // right pink
+                                Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
                                 Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0)),      // small yellow
-                                Sphere(Vector(-20, 21, -13), 10, mirror_vect)              // left mirror
+                                Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
+                                Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49)          // left lens
                                 };
     std::vector<Light> Lights{{Vector(-10, 20, 40), 7*10000000}, {Vector(15, 0, -5), 6*1000000}};
     
