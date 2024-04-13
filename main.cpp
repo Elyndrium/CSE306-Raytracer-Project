@@ -9,6 +9,7 @@
 
 #include <iostream>
 #include <thread>
+#include <random>
 
 #define PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679821
 
@@ -229,6 +230,34 @@ Vector get_color(std::vector<Sphere> Scene, std::vector<Light> Lights, Ray pr, i
     return color;
 }
 
+
+void random_cos(const Vector &N){
+    std::default_random_engine gen;
+    std::uniform_real_distribution<double> udis(0.0,1.0);
+    double r1 = udis(gen);
+    double r2 = udis(gen);
+    double x = cos(2*PI*r1) * sqrt(1 - r2);
+    double y = sin(2*PI*r1) * sqrt(1 - r2);
+    double z = sqrt(r2);
+
+    double minabs_N = std::min(std::min(abs(N.data[0]), abs(N.data[1])), abs(N.data[2]));
+    Vector T1;
+    if (abs(N.data[0]) <= abs(N.data[1]) && abs(N.data[0]) <= abs(N.data[2])){
+        T1 = Vector(0, -N.data[1], N.data[2]);
+    }
+    else if (abs(N.data[1]) <= abs(N.data[2])){
+        T1 = Vector(-N.data[2], 0, N.data[0]);
+    }
+    else{
+        T1 = Vector(-N.data[1], N.data[0], 0);
+    }
+    T1.normalize();
+    Vector T2 = cross(N, T1);
+
+    Vector V = x*T1 + y*T2 + z*N;
+}
+
+
 void concurrent_line(std::vector<Sphere> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image){
     for (int i = i0; i < i0+block_size; i++){
         for (int j = 0; j < W; j++) {
@@ -246,6 +275,8 @@ void concurrent_line(std::vector<Sphere> Scene, std::vector<Light> Lights, int W
 }
 
 int main(){
+    sampling_todo();
+    return 0;
     Vector empty_vec = Vector(-1, -1, -1);
     std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),        // center ball
                                 Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
@@ -263,15 +294,12 @@ int main(){
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
-    int W = 1024;
-    int H = 1024;
+    int W = 512;
+    int H = 512;
  
     std::vector<unsigned char> image(W * H * 3, 0);
-
     size_t n_threads = 48;
-
-    size_t block_size = H / n_threads;
-
+    size_t block_size = H / (n_threads-1);
     std::vector<std::thread> threads(n_threads);
     
     for (int i = 0; i < n_threads-1; i++) {
@@ -283,8 +311,7 @@ int main(){
             Ray pr = pixel_ray(W, H, i, j);
             Vector color = Vector(0,0,0);
             color = get_color(Scene, Lights, pr);
-                
-            //std::cout << color[0] << " " << color[1] << " " << color[2] << std::endl;
+
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
             image[(i * W + j) * 3 + 1] = color.data[1];
