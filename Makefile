@@ -1,7 +1,6 @@
 
 build:
 	g++ main.cpp
-	a.exe
 
 rebuild: clean build
 
