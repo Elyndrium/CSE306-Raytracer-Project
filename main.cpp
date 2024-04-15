@@ -183,12 +183,21 @@ void gamma_correction(Vector& color){
 }
 
 
-Vector random_cos(const Vector &N){
-    std::hash<std::thread::id> hasher;
-    static thread_local std::mt19937* generator = new std::mt19937(clock() + hasher(std::this_thread::get_id()));
-    std::uniform_real_distribution<double> udis(0.001,0.999);
-    double r1 = udis(*generator);
-    double r2 = udis(*generator);
+Vector random_cos(const Vector &N, const double r1i, const double r2i){
+    double r1;
+    double r2;
+    if (r1i == -1){
+        std::hash<std::thread::id> hasher;
+        static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+        std::uniform_real_distribution<double> udis(0.00001,0.99999);
+        r1 = udis(generator);
+        r2 = udis(generator);
+    }
+    else{
+        r1 = r1i;
+        r2 = r2i;
+    }
+    
     double x = cos(2*PI*r1) * sqrt(1 - r2);
     double y = sin(2*PI*r1) * sqrt(1 - r2);
     double z = sqrt(r2);
@@ -217,7 +226,7 @@ Vector normalized_product_element_wise(Vector a, Vector b){
     return Vector(a.data[0] * b.data[0]/255, a.data[1] * b.data[1]/255, a.data[2] * b.data[2]/255);
 }
 
-Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth){
+Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth, double r1i, double r2i){
     /*
         Only follows one path, has to be sampled multiple times to get good results
     */
@@ -235,7 +244,7 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
         double dotwin = dot(pr.unit, normal_towards_ray);
         Vector epsilon_above = cast.intersect.position + normal_towards_ray * epsilon;
         if (cast.sphere->mirror && (reflections_depth>0)){
-            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth);
+            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i);
         }
         else if (cast.sphere->transp){
             // We always assume the sphere is standing in air
@@ -247,16 +256,17 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
             Vector tangential_dir = n1n2 * (pr.unit - dotwin * normal_towards_ray);
             double in_sqrt = 1 - (pow(n1n2,2) * (1 - pow(dotwin,2)));
             if (in_sqrt<0){
-                std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl;
+                std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl; // Cast thinks it's inside when it's not
+                // This appears when we put the camera inside the lens, for some reason it bugs
                 cast.sphere->mirror = true;
                 cast.sphere->refraction = 0;
                 cast.sphere->transp = false;
-                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth);
+                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i);
             }
             Vector normal_dir = - normal_towards_ray * sqrt(in_sqrt);
             Vector refracted_direction = tangential_dir + normal_dir;
             Ray reflected_ray = Ray(epsilon_after, refracted_direction);
-            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth);
+            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i);
         }
         Vector albedo = (*cast.sphere).albedo;
 
@@ -274,19 +284,39 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
 
         // We add indirect lighting
         if (ray_depth > 0){
-            Ray diffuse_bounce = Ray(epsilon_above, random_cos(normal_towards_ray));
-            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1));
+            Ray diffuse_bounce = Ray(epsilon_above, random_cos(normal_towards_ray, r1i, r2i));
+            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1, -1, -1));
         }
     }
     return color;
 }
 
-Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth = 20, int ray_depth = 4, int monte_carlo_size = 500){
+Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 256){
     Vector color = Vector(0,0,0);
-    //TODO generate table of random values (lloyd iterations for first column = first bounce of each iter)
-    //TODO map it so that each time they are correctly used
+    std::vector<double> r1v(monte_carlo_size);
+    std::vector<double> r2v(monte_carlo_size);
+    std::hash<std::thread::id> hasher;
+    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+    std::uniform_real_distribution<double> udis(0.00001,0.99999);
+    double r1;
+    double r2;
+    //std::uniform_real_distribution<double> r2dis(std::min((double)j/size_side, 0.00001),std::min((double)(j+1)/size_side, 0.99999));
+    int size_side = sqrt(monte_carlo_size);
+    for (int i = 0; i<size_side; i++){
+        for (int j = 0; j<size_side; j++){
+            r1 = udis(generator);
+            r2 = udis(generator);
+            r1v[i*size_side + j] = r1*i/size_side + (1-r1)*(i+1)/size_side;
+            r2v[i*size_side + j] = r2*j/size_side + (1-r2)*(j+1)/size_side;
+        }
+    }
+    
+    for (int i = pow(size_side, 2); i<monte_carlo_size; i++){
+        r1v[i] = udis(generator);
+        r2v[i] = udis(generator);
+    }
     for (int i=0; i<monte_carlo_size; i++){
-        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth);
+        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i]);
     }
     return color/monte_carlo_size;
 }
@@ -298,7 +328,7 @@ void concurrent_line(std::vector<Sphere> Scene, std::vector<Light> Lights, int W
             Vector color = Vector(0,0,0);
             color = get_color(Scene, Lights, pr);
 
-            //std::cout << color[0] << " " << color[1] << " " << color[2] << std::endl;
+
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
             image[(i * W + j) * 3 + 1] = color.data[1];
@@ -318,7 +348,7 @@ int main(){
                                 Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
                                 Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0)),      // small yellow
                                 Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
-                                Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49)          // left lens
+                                Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49)         // left lens
                                 };
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
                                 {Vector(15, 0, -5), 4*1000000}
