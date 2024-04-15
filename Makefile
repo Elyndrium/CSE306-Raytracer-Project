@@ -2,8 +2,8 @@
 build:
 	g++ main.cpp -Ofast -Wall
 
-debug_rebuild: clean
-	g++ main.cpp -Wall
+run: rebuild
+	a.exe
 
 rebuild: clean build
 

@@ -281,8 +281,10 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
     return color;
 }
 
-Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth = 20, int ray_depth = 5, int monte_carlo_size = 1000){
+Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth = 20, int ray_depth = 4, int monte_carlo_size = 500){
     Vector color = Vector(0,0,0);
+    //TODO generate table of random values (lloyd iterations for first column = first bounce of each iter)
+    //TODO map it so that each time they are correctly used
     for (int i=0; i<monte_carlo_size; i++){
         color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth);
     }
@@ -318,15 +320,15 @@ int main(){
                                 Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
                                 Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49)          // left lens
                                 };
-    std::vector<Light> Lights{  {Vector(-10, 20, 40), 7*10000000},
-                                {Vector(15, 0, -5), 6*1000000}
+    std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
+                                {Vector(15, 0, -5), 4*1000000}
                                 };
     
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
-    int W = 512;
-    int H = 512;
+    int W = 256;
+    int H = 256;
  
     std::vector<unsigned char> image(W * H * 3, 0);
     size_t n_threads = 32;
@@ -350,7 +352,7 @@ int main(){
     }
 
     for (size_t i = 0; i < n_threads-1; i++){
-        std::cout << "thread " << i << " joined" << std::endl;
+        std::cout << "thread " << i << " joining" << std::endl;
         threads[i].join();
     }
 
