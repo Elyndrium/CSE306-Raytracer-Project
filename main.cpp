@@ -10,6 +10,7 @@
 #include <iostream>
 #include <thread>
 #include <random>
+#include <algorithm>
 
 #define PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679821
 
@@ -248,11 +249,25 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
         }
         else if (cast.sphere->transp){
             // We always assume the sphere is standing in air
-            Vector epsilon_after = cast.intersect.position - normal_towards_ray * epsilon;
-            double n1n2 = 1.0/cast.sphere->refraction;
+            // We add fresnel; if we have to reflect, then do as if it was a mirror; otherwise do normal
+            double n1 = 1.0;
+            double n2 = cast.sphere->refraction;
             if (cast.intersect.inside == true){
-                n1n2 = cast.sphere->refraction;
+                n1 = cast.sphere->refraction;
+                n2 = 1;
             }
+            double k0 = pow((n1 - n2), 2) / pow(n1 + n2, 2);
+            double refl_proba = k0 + (1-k0)*pow(1 - abs(dotwin), 5);
+            std::hash<std::thread::id> hasher;
+            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+            std::uniform_real_distribution<double> udis(0,1);
+            if (udis(generator) < refl_proba){
+                // If we actually have reflection, reflect
+                return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i);
+            }
+            // End of fresnel
+            double n1n2 = n1/n2;
+            Vector epsilon_after = cast.intersect.position - normal_towards_ray * epsilon;
             Vector tangential_dir = n1n2 * (pr.unit - dotwin * normal_towards_ray);
             double in_sqrt = 1 - (pow(n1n2,2) * (1 - pow(dotwin,2)));
             if (in_sqrt<0){
@@ -291,31 +306,37 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
     return color;
 }
 
-Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 256){
+Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 400){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
-    std::hash<std::thread::id> hasher;
-    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
     std::uniform_real_distribution<double> udis(0.00001,0.99999);
     double r1;
     double r2;
     //std::uniform_real_distribution<double> r2dis(std::min((double)j/size_side, 0.00001),std::min((double)(j+1)/size_side, 0.99999));
     int size_side = sqrt(monte_carlo_size);
-    for (int i = 0; i<size_side; i++){
-        for (int j = 0; j<size_side; j++){
-            r1 = udis(generator);
-            r2 = udis(generator);
+    for (double i = 0; i<size_side; i++){
+        for (double j = 0; j<size_side; j++){
+            r1 = udis(*generator);
+            r2 = udis(*generator);
             r1v[i*size_side + j] = r1*i/size_side + (1-r1)*(i+1)/size_side;
             r2v[i*size_side + j] = r2*j/size_side + (1-r2)*(j+1)/size_side;
         }
     }
     
     for (int i = pow(size_side, 2); i<monte_carlo_size; i++){
-        r1v[i] = udis(generator);
-        r2v[i] = udis(generator);
+        r1v[i] = udis(*generator);
+        r2v[i] = udis(*generator);
     }
+    double stdev = 0.5; //between 0.5 and 0.75 should be good for 256*256 (increase linear in x*x i think)
+    double di;
+    double dj;
     for (int i=0; i<monte_carlo_size; i++){
+        r1 = udis(*generator);
+        r2 = udis(*generator);
+        di = stdev * sqrt(-2*log(r1)) * cos(2*PI*r2);
+        dj = stdev * sqrt(-2*log(r1)) * sin(2*PI*r2);
+        Ray pr = pixel_ray(W, H, ir+di, jr+dj);
         color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i]);
     }
     return color/monte_carlo_size;
@@ -324,9 +345,9 @@ Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr,
 void concurrent_line(std::vector<Sphere> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image){
     for (size_t i = i0; i < i0+block_size; i++){
         for (int j = 0; j < W; j++) {
-            Ray pr = pixel_ray(W, H, i, j);
-            Vector color = Vector(0,0,0);
-            color = get_color(Scene, Lights, pr);
+            std::hash<std::thread::id> hasher;
+            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+            Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
 
 
             gamma_correction(color);
@@ -371,8 +392,9 @@ int main(){
 
     for (int i = (n_threads-1)*block_size; i < W; i++){
         for (int j = 0; j < W; j++) {
-            Ray pr = pixel_ray(W, H, i, j);
-            Vector color = get_color(Scene, Lights, pr);
+            std::hash<std::thread::id> hasher;
+            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+            Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
 
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
