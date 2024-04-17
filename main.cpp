@@ -11,6 +11,8 @@
 #include <thread>
 #include <random>
 #include <algorithm>
+#include <string>
+#include <stdio.h>
 
 #define PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679821
 
@@ -91,6 +93,22 @@ Intersection make_intersection(bool flag, Vector position, double t, bool inside
     return {flag, position, t, inside};
 }
 
+Vector constant_position(double t){return Vector(0,0,0);}
+
+Vector ninja_movement_yellow(double t){
+    // Diameter is 6 so movement ~5
+    if (t<0.075){return Vector(-5, 0, 0);}
+    else if (t<0.425){return Vector(0,0,0);}
+    else if (t<0.5){return Vector(5,0,0);}
+    else {return Vector(24*(t-0.75),0,0);}
+}
+
+Vector throw_movement(double t){
+    // Make more samples near the end of the trajectory 
+    double tp = (sqrt(t)+t)/2;
+    return Vector(8*tp,25*tp - 20*pow(tp, 2),0);
+}
+
 class Sphere {
 public:
     Vector origin;
@@ -99,10 +117,12 @@ public:
     bool mirror;
     bool transp;
     double refraction;
-    explicit Sphere(Vector o, double R, Vector c, double refr = -1){
+    Vector (*movement)(double);
+    explicit Sphere(Vector o, double R, Vector c, double refr = -1, Vector (*m)(double) = &constant_position){
         origin = o;
         radius = R;
         albedo = c;
+        movement = m;
         refraction = refr;
         if (refraction == -1){
             mirror = false;
@@ -117,14 +137,15 @@ public:
             mirror = false;
         }
     }
-    Intersection intersect(Ray &r){
-        Vector omc = r.origin - origin;
+    Intersection intersect(Ray &r, double time){
+        Vector origint = origin + (*movement)(time);
+        Vector omc = r.origin - origint;
         double delta = pow(dot(r.unit, omc), 2) - (dot(omc, omc) - pow(radius, 2));
         if (delta<0){
             return make_intersection(false, r.origin, 0, false);
         }
         double sq_delta = sqrt(delta);
-        double t = dot(r.unit, origin-r.origin) - sq_delta;
+        double t = dot(r.unit, origint-r.origin) - sq_delta;
         bool inside = false;
         if (t<0){
             t += 2*sq_delta;
@@ -142,14 +163,14 @@ struct Cast{
     Sphere* sphere;
 };
 
-Cast scene_intersect(std::vector<Sphere> &scene, Ray &r){
+Cast scene_intersect(std::vector<Sphere> &scene, Ray &r, double t){
     if (scene.size() == 0){
         return {false, r.origin, 0};
     }
-    Cast best = {scene[0].intersect(r), &(scene[0])};
+    Cast best = {scene[0].intersect(r, t), &(scene[0])};
     Intersection current_intersect;
     for (size_t i=1; i<scene.size(); i++){
-        current_intersect = scene[i].intersect(r);
+        current_intersect = scene[i].intersect(r, t);
         if (best.intersect.flag == false || (current_intersect.flag == true && current_intersect.t < best.intersect.t)){
             best = {current_intersect, &(scene[i])};
         }
@@ -227,13 +248,13 @@ Vector normalized_product_element_wise(Vector a, Vector b){
     return Vector(a.data[0] * b.data[0]/255, a.data[1] * b.data[1]/255, a.data[2] * b.data[2]/255);
 }
 
-Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth, double r1i, double r2i){
+Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth, double r1i, double r2i, double t){
     /*
         Only follows one path, has to be sampled multiple times to get good results
     */
     Vector color = Vector(0,0,0);
     if (ray_depth < 0){return color;} // Should not happen but we never know
-    Cast cast = scene_intersect(Scene, pr);
+    Cast cast = scene_intersect(Scene, pr, t);
     double epsilon = 1.0/100000;
     if (cast.intersect.flag == true){
         Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
@@ -245,7 +266,7 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
         double dotwin = dot(pr.unit, normal_towards_ray);
         Vector epsilon_above = cast.intersect.position + normal_towards_ray * epsilon;
         if (cast.sphere->mirror && (reflections_depth>0)){
-            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i);
+            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t);
         }
         else if (cast.sphere->transp){
             // We always assume the sphere is standing in air
@@ -263,7 +284,7 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
             std::uniform_real_distribution<double> udis(0,1);
             if (udis(generator) < refl_proba){
                 // If we actually have reflection, reflect
-                return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i);
+                return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t);
             }
             // End of fresnel
             double n1n2 = n1/n2;
@@ -271,17 +292,17 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
             Vector tangential_dir = n1n2 * (pr.unit - dotwin * normal_towards_ray);
             double in_sqrt = 1 - (pow(n1n2,2) * (1 - pow(dotwin,2)));
             if (in_sqrt<0){
-                std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl; // Cast thinks it's inside when it's not
+                std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl; // thinks it's inside when it's not
                 // This appears when we put the camera inside the lens, for some reason it bugs
                 cast.sphere->mirror = true;
                 cast.sphere->refraction = 0;
                 cast.sphere->transp = false;
-                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i);
+                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i, t);
             }
             Vector normal_dir = - normal_towards_ray * sqrt(in_sqrt);
             Vector refracted_direction = tangential_dir + normal_dir;
             Ray reflected_ray = Ray(epsilon_after, refracted_direction);
-            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i);
+            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i, t);
         }
         Vector albedo = (*cast.sphere).albedo;
 
@@ -289,7 +310,7 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
             // First test if there is a shadow
             Vector to_shadow = Lights[k].position - epsilon_above;
             Ray shadow_ray = Ray(epsilon_above, to_shadow);
-            Cast shadow_intersection = scene_intersect(Scene, shadow_ray);
+            Cast shadow_intersection = scene_intersect(Scene, shadow_ray, t);
             if (!shadow_intersection.intersect.flag | (to_shadow.norm2() < (epsilon_above - shadow_intersection.intersect.position).norm2())){
                 // Then add the light to the pixel
                 Vector to_light = Lights[k].position - cast.intersect.position;
@@ -300,19 +321,18 @@ Vector get_color_aux(std::vector<Sphere> &Scene, std::vector<Light> &Lights, Ray
         // We add indirect lighting
         if (ray_depth > 0){
             Ray diffuse_bounce = Ray(epsilon_above, random_cos(normal_towards_ray, r1i, r2i));
-            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1, -1, -1));
+            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1, -1, -1, t));
         }
     }
     return color;
 }
 
-Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 400){
+Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 1024, double DOF_dist = 55, double DOF_radius = 0.75){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
     std::uniform_real_distribution<double> udis(0.00001,0.99999);
-    double r1;
-    double r2;
+    double r1, r2;
     //std::uniform_real_distribution<double> r2dis(std::min((double)j/size_side, 0.00001),std::min((double)(j+1)/size_side, 0.99999));
     int size_side = sqrt(monte_carlo_size);
     for (double i = 0; i<size_side; i++){
@@ -328,16 +348,28 @@ Vector get_color(std::vector<Sphere> &Scene, std::vector<Light> &Lights, int W, 
         r1v[i] = udis(*generator);
         r2v[i] = udis(*generator);
     }
-    double stdev = 0.5; //between 0.5 and 0.75 should be good for 256*256 (increase linear in x*x i think)
-    double di;
-    double dj;
+    double stdev = 0.4; //between 0.25 and 0.5 should be good for 256*256
+    double di, dj, r, theta, t;
+    std::uniform_real_distribution<double> r_squared(0, pow(DOF_radius, 2));
+    std::uniform_real_distribution<double> theta_gen(0, 2*PI);
+    std::uniform_real_distribution<double> t_gen(0, 1);
+    Vector P;
     for (int i=0; i<monte_carlo_size; i++){
         r1 = udis(*generator);
         r2 = udis(*generator);
         di = stdev * sqrt(-2*log(r1)) * cos(2*PI*r2);
         dj = stdev * sqrt(-2*log(r1)) * sin(2*PI*r2);
         Ray pr = pixel_ray(W, H, ir+di, jr+dj);
-        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i]);
+        if (DOF_dist > 0){
+            P = pr.origin + pr.unit * DOF_dist/abs(pr.unit.data[2]);
+            r = sqrt(r_squared(*generator));
+            theta = theta_gen(*generator);
+            pr.origin = pr.origin + Vector(r*cos(theta), r*sin(theta), 0);
+            pr.unit = P - pr.origin;
+            pr.unit.normalize();
+        }
+        t = t_gen(*generator);
+        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i], t);
     }
     return color/monte_carlo_size;
 }
@@ -360,6 +392,7 @@ void concurrent_line(std::vector<Sphere> Scene, std::vector<Light> Lights, int W
 
 int main(){
     Vector empty_vec = Vector(-1, -1, -1);
+    // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
     std::vector<Sphere> Scene{  Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),        // center ball
                                 Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
@@ -367,7 +400,8 @@ int main(){
                                 Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
                                 Sphere(Vector(1000, 0, 0), 940, Vector(255, 0, 255)),   // right pink
                                 Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
-                                Sphere(Vector(15, 5, -5), 3, Vector(255, 255, 0)),      // small yellow
+                                Sphere(Vector(12, 15, -5), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
+                                Sphere(Vector(15, -2, 0), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (throw)
                                 Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
                                 Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49)         // left lens
                                 };
@@ -378,8 +412,8 @@ int main(){
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
-    int W = 256;
-    int H = 256;
+    int W = 512;
+    int H = 512;
  
     std::vector<unsigned char> image(W * H * 3, 0);
     size_t n_threads = 32;
