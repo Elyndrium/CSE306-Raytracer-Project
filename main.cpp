@@ -98,23 +98,41 @@ struct Intersection {
     Vector position;
     double t;
     bool inside;
+    Vector normal;
+    Intersection(bool fla, Vector pos, double ti, bool insid, Vector norm) : flag(fla), position(pos), t(ti), inside(insid), normal(norm) {}
+};
+
+struct Cast{
+    Intersection intersect;
+    Vector albedo;
+    bool mirror;
+    bool transp;
+    double refraction;
+    // If necessary, add pointer to geometry
+    Cast(Intersection inter, Vector alb, double refr) : intersect(inter), albedo(alb), refraction(refr) {
+        if (refraction == -1){
+            mirror = false;
+            transp = false;
+        }
+        else if (refraction == 0){
+            transp = false;
+            mirror = true;
+        }
+        else{
+            transp = true;
+            mirror = false;
+        }
+    }
 };
 
 class Geometry{
     public:
         virtual ~Geometry() {}
-        Vector albedo;
         Vector origin;
-        bool mirror;
-        bool transp;
-        double refraction;
         Vector (*movement)(double);
-        virtual Intersection intersect(Ray &r, double time) = 0;
+        double refraction;
+        virtual Cast intersect(Ray &r, double time) = 0;
 };
-
-Intersection make_intersection(bool flag, Vector position, double t, bool inside){
-    return {flag, position, t, inside};
-}
 
 Vector constant_position(double t){return Vector(0,0,0);}
 
@@ -132,22 +150,24 @@ Vector throw_movement(double t){
     return Vector(8*tp,25*tp - 20*pow(tp, 2),0);
 }
 
-Intersection triangle_intersect(Vector A, Vector B, Vector C, Ray &r){
+Intersection triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector normalA, Vector normalB, Vector normalC){
     Vector e1 = B-A;
     Vector e2 = C-A;
     Vector N = cross(e1, e2);
     double dotUN = dot(r.unit, N);
     if (dotUN == 0){
-        return make_intersection(false, Vector(0,0,0), 0, false);
+        return Intersection(false, Vector(0,0,0), 0, false, N);
     }
     double beta = dot(e2, cross(A - r.origin, r.unit))/dotUN;
     double gamma = -dot(e1, cross(A - r.origin, r.unit))/dotUN;
     double alpha = 1 - beta - gamma;
-    if (0<=alpha && alpha<=1 && 0<=beta && beta<=1 && 0<=gamma && gamma<=1){
-        double t = dot(A - r.origin, N)/dotUN;
-        return make_intersection(true, A + beta*e1 + gamma*e2, t, false);
+    double t = dot(A - r.origin, N)/dotUN;
+    if (0<=alpha && alpha<=1 && 0<=beta && beta<=1 && 0<=gamma && gamma<=1 && t>0){
+        Vector shading_normal = alpha * normalA + beta * normalB + gamma * normalC;
+        shading_normal.normalize();
+        return Intersection(true, A + beta*e1 + gamma*e2, t, false, shading_normal);
     }
-    return make_intersection(false, Vector(0,0,0), 0, false);
+    return Intersection(false, Vector(0,0,0), 0, false, Vector(0,0,1));
 }
 
 class TriangleMesh : public Geometry {
@@ -157,30 +177,32 @@ public:
     explicit TriangleMesh(const char* obj, Vector ori, double rescale = 1, double refr = -1, Vector (*m)(double) = &constant_position){
         readOBJ(obj);
         origin = ori;
-        movement = m;
-        // TODO fill albedo | mirror/transp/refraction ?
-        albedo = Vector(255, 255, 255);
-        mirror = false;
-        transp = false;
         refraction = -1;
+        movement = m;
+        if (rescale != 1){
+            for (size_t i = 0; i<vertices.size(); i++){
+                vertices[i] = vertices[i]*rescale;
+            }
+        }
     }
 	
-    Intersection intersect(Ray &r, double time) override {
+    Cast intersect(Ray &r, double time) override {
         if (indices.size() == 0){
-            return make_intersection(false, r.origin, 0, false);
+            return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), Vector(0,0,0), -1);
         }
         TriangleIndices index = indices[0];
         Vector origint = origin + movement(time);
-        Intersection best = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r);
-        Intersection current_intersect;
+        Intersection best_inter = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+        size_t best_index = 0;
         for (size_t i=1; i<indices.size(); i++){
             index = indices[i];
-            current_intersect = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r);
-            if (best.flag == false || (current_intersect.flag == true && current_intersect.t < best.t)){
-                best = current_intersect;
+            Intersection current_intersect = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+            if (best_inter.flag == false || (current_intersect.flag == true && current_intersect.t < best_inter.t)){
+                best_inter = current_intersect;
+                best_index = i;
             }
         }
-        return best;
+        return Cast(best_inter, Vector(255, 255, 242), refraction); // TODO update uvs
     }
     
 	void readOBJ(const char* obj) {
@@ -360,38 +382,27 @@ public:
 	std::vector<Vector> vertices;
 	std::vector<Vector> normals;
 	std::vector<Vector> uvs;
-	std::vector<Vector> vertexcolors;
+	std::vector<Vector> vertexcolors; // Colors between 0 and 1
 	
 };
 
 class Sphere : public Geometry {
 public:
     double radius;
+    Vector albedo;
     explicit Sphere(Vector o, double R, Vector c, double refr = -1, Vector (*m)(double) = &constant_position){
         origin = o;
         radius = R;
         albedo = c;
         movement = m;
         refraction = refr;
-        if (refraction == -1){
-            mirror = false;
-            transp = false;
-        }
-        else if (refraction == 0){
-            transp = false;
-            mirror = true;
-        }
-        else{
-            transp = true;
-            mirror = false;
-        }
     }
-    Intersection intersect(Ray &r, double time) override {
+    Cast intersect(Ray &r, double time) override {
         Vector origint = origin + (*movement)(time);
         Vector omc = r.origin - origint;
         double delta = pow(dot(r.unit, omc), 2) - (dot(omc, omc) - pow(radius, 2));
         if (delta<0){
-            return make_intersection(false, r.origin, 0, false);
+            return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), albedo, refraction);
         }
         double sq_delta = sqrt(delta);
         double t = dot(r.unit, origint-r.origin) - sq_delta;
@@ -399,29 +410,26 @@ public:
         if (t<0){
             t += 2*sq_delta;
             if (t<0){
-                return make_intersection(false, r.origin, 0, false);
+                return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), albedo, refraction);
             }
             inside = true;
         }
-        return make_intersection(true, r.origin + r.unit*t, t, inside);
+        Vector normal = (r.origin + r.unit*t) - origint;
+        normal.normalize();
+        if (inside == true){normal = -normal;}
+        return Cast(Intersection(true, r.origin + r.unit*t, t, inside, normal), albedo, refraction);
     }
-};
-
-struct Cast{
-    Intersection intersect;
-    Geometry* sphere;
 };
 
 Cast scene_intersect(std::vector<Geometry*> &scene, Ray &r, double t){
     if (scene.size() == 0){
-        return {false, r.origin, 0};
+        return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), Vector(0,0,0), -1);
     }
-    Cast best = {scene[0]->intersect(r, t), scene[0]};
-    Intersection current_intersect;
+    Cast best = scene[0]->intersect(r, t);
     for (size_t i=1; i<scene.size(); i++){
-        current_intersect = scene[i]->intersect(r, t);
-        if (best.intersect.flag == false || (current_intersect.flag == true && current_intersect.t < best.intersect.t)){
-            best = {current_intersect, scene[i]};
+        Cast current_cast = scene[i]->intersect(r, t);
+        if (best.intersect.flag == false || (current_cast.intersect.flag == true && current_cast.intersect.t < best.intersect.t)){
+            best = current_cast;
         }
     }
     return best;
@@ -505,24 +513,20 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     Cast cast = scene_intersect(Scene, pr, t);
     double epsilon = 1.0/100000;
     if (cast.intersect.flag == true){
-        Vector sphere_normal = cast.intersect.position - (*cast.sphere).origin;
-        sphere_normal.normalize();
-        Vector normal_towards_ray = sphere_normal;
-        if (cast.intersect.inside == true){
-            normal_towards_ray = -sphere_normal;
-        }
+        Vector normal_towards_ray = cast.intersect.normal;
+
         double dotwin = dot(pr.unit, normal_towards_ray);
         Vector epsilon_above = cast.intersect.position + normal_towards_ray * epsilon;
-        if (cast.sphere->mirror && (reflections_depth>0)){
+        if (cast.mirror && (reflections_depth>0)){
             return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t);
         }
-        else if (cast.sphere->transp){
+        else if (cast.transp){
             // We always assume the sphere is standing in air
             // We add fresnel; if we have to reflect, then do as if it was a mirror; otherwise do normal
             double n1 = 1.0;
-            double n2 = cast.sphere->refraction;
+            double n2 = cast.refraction;
             if (cast.intersect.inside == true){
-                n1 = cast.sphere->refraction;
+                n1 = cast.refraction;
                 n2 = 1;
             }
             double k0 = pow((n1 - n2), 2) / pow(n1 + n2, 2);
@@ -542,9 +546,9 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
             if (in_sqrt<0){
                 std::cout << "WARNING: issue in refraction handling; transparent surface with mirror behaviour from value of refraction index" << std::endl; // thinks it's inside when it's not
                 // This appears when we put the camera inside the lens, for some reason it bugs
-                cast.sphere->mirror = true;
-                cast.sphere->refraction = 0;
-                cast.sphere->transp = false;
+                cast.mirror = true;
+                cast.refraction = 0;
+                cast.transp = false;
                 return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i, t);
             }
             Vector normal_dir = - normal_towards_ray * sqrt(in_sqrt);
@@ -552,7 +556,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
             Ray reflected_ray = Ray(epsilon_after, refracted_direction);
             return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i, t);
         }
-        Vector albedo = (*cast.sphere).albedo;
+        Vector albedo = cast.albedo;
 
         for (size_t k=0; k<Lights.size(); k++){
             // First test if there is a shadow
@@ -575,7 +579,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 0, int monte_carlo_size = 3, double DOF_dist = 55, double DOF_radius = 0.75){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 0, int monte_carlo_size = 2, double DOF_dist = 55, double DOF_radius = 0.75){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
@@ -641,18 +645,18 @@ void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, in
 int main(){
     Vector empty_vec = Vector(-1, -1, -1);
     // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
-    std::vector<Geometry*> Scene{new Sphere(Vector(0,0,0), 10, Vector(170, 10, 170)),        // center ball
+    std::vector<Geometry*> Scene{//new Sphere(Vector(0,-3,0), 5, Vector(170, 10, 170)),        // center ball
                                 new Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 new Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
                                 new Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
                                 new Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
                                 new Sphere(Vector(1000, 0, 0), 940, Vector(255, 0, 255)),   // right pink
                                 new Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
-                                new Sphere(Vector(12, 15, -5), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
-                                new Sphere(Vector(15, -2, 0), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (throw)
+                                //new Sphere(Vector(12, 15, -5), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
+                                //new Sphere(Vector(15, -2, 0), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (throw)
                                 new Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
-                                new Sphere(Vector(-10, 0, 15), 8, empty_vec, 1.49),         // left lens
-                                new TriangleMesh("cat.obj", Vector(0, -10, 0))
+                                new Sphere(Vector(-10, 0, 15), 5, empty_vec, 1.49),         // left lens
+                                new TriangleMesh("cat.obj", Vector(0, -10, 0), 0.6)
                                 };
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
                                 {Vector(15, 0, -5), 4*1000000}
