@@ -5,7 +5,7 @@ TD1: Shadows, mirrors done, transparency too
 
 TD2: random_cos(), antialiasing, depth of field, motion blur
 
-TD3: TODO
+TD3: cat rendered (black) TODO rewrite get_color_aux (separate case for triangle) by changing the Cast type (intersect returns Cast now) TODO rewrite constructor of triangle mesh based on this
 
 TD4: TODO
 
