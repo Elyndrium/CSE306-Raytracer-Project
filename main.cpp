@@ -103,13 +103,13 @@ struct Intersection {
 };
 
 struct Cast{
-    Intersection intersect;
+    Intersection intersect = Intersection(false, Vector(0,0,0), 0, false, Vector(0,0,1));
     Vector albedo;
     bool mirror;
     bool transp;
     double refraction;
     // If necessary, add pointer to geometry
-    Cast(Intersection inter, Vector alb, double refr) : intersect(inter), albedo(alb), refraction(refr) {
+    Cast( Intersection inter, Vector alb, double refr) : intersect(inter), albedo(alb), refraction(refr) {
         if (refraction == -1){
             mirror = false;
             transp = false;
@@ -123,6 +123,13 @@ struct Cast{
             mirror = false;
         }
     }
+    Cast(){
+        intersect = Intersection(false, Vector(0,0,0), std::numeric_limits<double>::max(), false, Vector(0,0,1));
+        albedo = Vector(0,0,0);
+        mirror = false;
+        transp = false;
+        refraction = -1;
+    }
 };
 
 class Geometry{
@@ -132,6 +139,7 @@ class Geometry{
         Vector (*movement)(double);
         double refraction;
         virtual Cast intersect(Ray &r, double time) = 0;
+        virtual void refresh_position_ONCE() = 0;
 };
 
 Vector constant_position(double t){return Vector(0,0,0);}
@@ -170,9 +178,187 @@ Intersection triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector nor
     return Intersection(false, Vector(0,0,0), 0, false, Vector(0,0,1));
 }
 
+struct PlaneIntersection{
+    bool flag;
+    double t;
+    PlaneIntersection(bool f, double tt) : flag(f), t(tt) {}
+};
+
+enum class Axis {x=0, y=1, z=2};
+
+class BoundingBox{
+public:
+    Vector pmin, pmax;
+    size_t indexmin, indexmax;
+    bool is_leaf;
+    BoundingBox* left_child;
+    BoundingBox* right_child;
+
+    BoundingBox(Vector min = Vector(std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max()), Vector max = Vector(std::numeric_limits<double>::lowest(),std::numeric_limits<double>::lowest(),std::numeric_limits<double>::lowest()), size_t imin = 0, size_t imax = 0, bool leaf = true, BoundingBox* lc = nullptr, BoundingBox* rc = nullptr) : pmin(min), pmax(max), indexmin(imin), indexmax(imax), is_leaf(leaf), left_child(lc), right_child(rc) {}
+
+    ~BoundingBox(){
+        delete left_child;
+        delete right_child;
+    }
+
+    PlaneIntersection intersect_plane(Ray &r, Vector A, Vector Normal){
+        double dotUN = dot(r.unit, Normal);
+        if (abs(dotUN) == 0){
+            return PlaneIntersection(false, 0);
+        }
+        double t = dot(A - r.origin, Normal)/dotUN;
+        return PlaneIntersection(true, t);
+    }
+
+    bool intersect_box(Ray &r, double time = 0, Vector (*move)(double) = &constant_position){
+        PlaneIntersection pxmin = intersect_plane(r, Vector(pmin[0], 0, 0) + move(time), Vector(1, 0, 0));
+        PlaneIntersection pxmax = intersect_plane(r, Vector(pmax[0], 0, 0) + move(time), Vector(1, 0, 0));
+        if (pxmin.flag == false){ // same as pxmax.flag==false
+            if (r.origin[0] > pmin[0] && r.origin[0] < pmax[0]){
+                pxmin.t = std::numeric_limits<double>::lowest();
+                pxmax.t = std::numeric_limits<double>::max();
+            }
+            else{
+                pxmin.t = 0;
+                pxmax.t = 0;
+            }
+        }
+        PlaneIntersection pymin = intersect_plane(r, Vector(0, pmin[1], 0) + move(time), Vector(0, 1, 0));
+        PlaneIntersection pymax = intersect_plane(r, Vector(0, pmax[1], 0) + move(time), Vector(0, 1, 0));
+        if (pymin.flag == false){
+            if (r.origin[0] > pmin[1] && r.origin[0] < pmax[1]){
+                pymin.t = std::numeric_limits<double>::lowest();
+                pymax.t = std::numeric_limits<double>::max();
+            }
+            else{
+                pymin.t = 0;
+                pymax.t = 0;
+            }
+        }
+        PlaneIntersection pzmin = intersect_plane(r, Vector(0,0,pmin[2]) + move(time), Vector(0, 0, 1));
+        PlaneIntersection pzmax = intersect_plane(r, Vector(0,0,pmax[2]) + move(time), Vector(0, 0, 1));
+        if (pzmin.flag == false){
+            if (r.origin[0] > pmin[2] && r.origin[0] < pmax[2]){
+                pzmin.t = std::numeric_limits<double>::lowest();
+                pzmax.t = std::numeric_limits<double>::max();
+            }
+            else{
+                pzmin.t = 0;
+                pzmax.t = 0;
+            }
+        }
+        double t1x = std::max(pxmin.t, pxmax.t);
+        double t0x = std::min(pxmin.t, pxmax.t);
+        double t1y = std::max(pymin.t, pymax.t);
+        double t0y = std::min(pymin.t, pymax.t);
+        double t1z = std::max(pzmin.t, pzmax.t);
+        double t0z = std::min(pzmin.t, pzmax.t);
+        
+        double mint1 = std::min(std::min(t1x, t1y), t1z);
+        double maxt0 = std::max(std::max(t0x, t0y), t0z);
+        if (mint1 > maxt0){ // if mint1 < 0 the bounding box is fully behind the ray
+            return true;
+        }
+        return false;
+    }
+
+    void split_box(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices){
+        if (is_leaf == false){throw "Bounding box with children can't be split";}
+        is_leaf = false;
+
+        // Find the best split
+        Axis axis;
+        double position;
+        Vector dist = pmax - pmin;
+        if (dist[0] > dist[1] && dist[0] > dist[2]){
+            axis = Axis::x;
+            position = (pmax[0]+pmin[0])/2;
+        }
+        else if (dist[1] > dist[2]){
+            axis = Axis::y;
+            position = (pmax[1]+pmin[1])/2;
+        }
+        else {
+            axis = Axis::z;
+            position = (pmax[2]+pmin[2])/2;
+        }
+
+        // Make the bounding box out of the split
+        BoundingBox left_first = BoundingBox(pmin, pmax);
+        BoundingBox right_first = BoundingBox(pmin, pmax);
+        if (axis == Axis::x){
+            left_first.pmax[0] = position;
+            right_first.pmin[1] = position;
+        } else if (axis == Axis::y){
+            left_first.pmax[1] = position;
+            right_first.pmin[1] = position;
+        } else{
+            left_first.pmax[2] = position;
+            right_first.pmin[2] = position;
+        }
+
+        // Quicksort indices in [indexmin, indexmax] according to bounding box and remember splitting index
+        size_t pivot = indexmin;
+        for (size_t i = indexmin; i < indexmax; i++){
+            Vector baryc = (vertices[indices[i].vtxi]+vertices[indices[i].vtxj]+vertices[indices[i].vtxk])/3;
+            if (baryc[(int)axis] < position){
+                std::swap(indices[i], indices[pivot]);
+                pivot++;
+            }
+        }
+
+        // Make the two children bounding boxes according to the split
+        left_child = new BoundingBox();
+        right_child = new BoundingBox();
+
+        for (size_t i = indexmin; i < pivot; i++){
+            for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
+                left_child->pmin[0] = std::min(left_child->pmin[0], vertex[0]);
+                left_child->pmax[0] = std::max(left_child->pmax[0], vertex[0]);
+                left_child->pmin[1] = std::min(left_child->pmin[1], vertex[1]);
+                left_child->pmax[1] = std::max(left_child->pmax[1], vertex[1]);
+                left_child->pmin[2] = std::min(left_child->pmin[2], vertex[2]);
+                left_child->pmax[2] = std::max(left_child->pmax[2], vertex[2]);
+            }
+        }
+        for (size_t i = pivot; i < indexmax; i++){
+            for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
+                right_child->pmin[0] = std::min(right_child->pmin[0], vertex[0]);
+                right_child->pmax[0] = std::max(right_child->pmax[0], vertex[0]);
+                right_child->pmin[1] = std::min(right_child->pmin[1], vertex[1]);
+                right_child->pmax[1] = std::max(right_child->pmax[1], vertex[1]);
+                right_child->pmin[2] = std::min(right_child->pmin[2], vertex[2]);
+                right_child->pmax[2] = std::max(right_child->pmax[2], vertex[2]);
+            }
+        }
+
+        left_child->indexmin = indexmin;
+        left_child->indexmax = pivot;
+        right_child->indexmin = pivot;
+        right_child->indexmax = indexmax;
+    }
+
+    void split_boxes(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices, size_t max_meshes = 10){
+        if (indexmax - indexmin > max_meshes){
+            split_box(indices, vertices);
+            if (left_child->indexmax == indexmax || right_child->indexmin == indexmin){
+                is_leaf = true;
+                left_child = nullptr;
+                right_child = nullptr;
+            } else {
+                left_child->split_boxes(indices, vertices, max_meshes);
+                right_child->split_boxes(indices, vertices, max_meshes);
+            }
+        }
+        
+    }
+};
+
 class TriangleMesh : public Geometry {
 public:
     ~TriangleMesh() {}
+
+    BoundingBox root_box = BoundingBox();
 
     explicit TriangleMesh(const char* obj, Vector ori, double rescale = 1, double refr = -1, Vector (*m)(double) = &constant_position){
         readOBJ(obj);
@@ -185,18 +371,66 @@ public:
             }
         }
     }
+
+    void refresh_position_ONCE() override {
+        place_origin();
+        generate_bounding();
+        root_box.split_boxes(indices, vertices);
+    }
+
+    void place_origin(){
+        for (size_t i = 0; i<vertices.size(); i++){
+            vertices[i] = vertices[i] + origin;
+        }
+    }
+
+    void generate_bounding(){
+        root_box = BoundingBox();
+        for (Vector vertex : vertices){
+            root_box.pmin[0] = std::min(root_box.pmin[0], vertex[0]);
+            root_box.pmax[0] = std::max(root_box.pmax[0], vertex[0]);
+            root_box.pmin[1] = std::min(root_box.pmin[1], vertex[1]);
+            root_box.pmax[1] = std::max(root_box.pmax[1], vertex[1]);
+            root_box.pmin[2] = std::min(root_box.pmin[2], vertex[2]);
+            root_box.pmax[2] = std::max(root_box.pmax[2], vertex[2]);
+        }
+        root_box.indexmin = 0;
+        root_box.indexmax = indices.size();
+    }
 	
     Cast intersect(Ray &r, double time) override {
+        // TODO not visit "farther boxes"
         if (indices.size() == 0){
-            return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), Vector(0,0,0), -1);
+            return Cast();
         }
-        TriangleIndices index = indices[0];
-        Vector origint = origin + movement(time);
-        Intersection best_inter = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+        std::vector<BoundingBox*> pile = {&root_box};
+        Cast best_cast = Cast();
+        while (pile.size()>0){
+            BoundingBox* current_box = pile.back();
+            pile.pop_back();
+            if (current_box->intersect_box(r, time, movement)){
+                if (current_box->is_leaf){
+                    Cast current_cast = intersect_aux(r, time, current_box->indexmin, current_box->indexmax);
+                    if (current_cast.intersect.flag == true && current_cast.intersect.t < best_cast.intersect.t){
+                        best_cast = current_cast;
+                    }
+                } else {
+                    pile.push_back(current_box->left_child);
+                    pile.push_back(current_box->right_child);
+                }
+            }
+
+        }
+        return best_cast;
+    }
+
+    Cast intersect_aux(Ray &r, double time, size_t indexmin, size_t indexmax) {
+        TriangleIndices index = indices[indexmin];
+        Intersection best_inter = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
         size_t best_index = 0;
-        for (size_t i=1; i<indices.size(); i++){
+        for (size_t i=indexmin+1; i<indexmax; i++){
             index = indices[i];
-            Intersection current_intersect = triangle_intersect(origint+vertices[index.vtxi], origint+vertices[index.vtxj], origint+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+            Intersection current_intersect = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
             if (best_inter.flag == false || (current_intersect.flag == true && current_intersect.t < best_inter.t)){
                 best_inter = current_intersect;
                 best_index = i;
@@ -375,7 +609,6 @@ public:
 
 		}
 		fclose(f);
-
 	}
 
 	std::vector<TriangleIndices> indices;
@@ -402,7 +635,7 @@ public:
         Vector omc = r.origin - origint;
         double delta = pow(dot(r.unit, omc), 2) - (dot(omc, omc) - pow(radius, 2));
         if (delta<0){
-            return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), albedo, refraction);
+            return Cast();
         }
         double sq_delta = sqrt(delta);
         double t = dot(r.unit, origint-r.origin) - sq_delta;
@@ -410,7 +643,7 @@ public:
         if (t<0){
             t += 2*sq_delta;
             if (t<0){
-                return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), albedo, refraction);
+                return Cast();
             }
             inside = true;
         }
@@ -419,11 +652,12 @@ public:
         if (inside == true){normal = -normal;}
         return Cast(Intersection(true, r.origin + r.unit*t, t, inside, normal), albedo, refraction);
     }
+    void refresh_position_ONCE() override {}
 };
 
 Cast scene_intersect(std::vector<Geometry*> &scene, Ray &r, double t){
     if (scene.size() == 0){
-        return Cast(Intersection(false, r.origin, 0, false, Vector(0,0,1)), Vector(0,0,0), -1);
+        return Cast();
     }
     Cast best = scene[0]->intersect(r, t);
     for (size_t i=1; i<scene.size(); i++){
@@ -665,6 +899,10 @@ int main(){
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
+    for (Geometry* object : Scene){
+        object->refresh_position_ONCE();
+    }
+
     int W = 512;
     int H = 512;
  
@@ -691,7 +929,6 @@ int main(){
     }
 
     for (size_t i = 0; i < n_threads-1; i++){
-        std::cout << "thread " << i << " joining" << std::endl;
         threads[i].join();
     }
 
