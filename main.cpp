@@ -210,7 +210,8 @@ public:
         return PlaneIntersection(true, t);
     }
 
-    bool intersect_box(Ray &r, double time = 0, Vector (*move)(double) = &constant_position){
+    double intersect_box(Ray &r, double time = 0, Vector (*move)(double) = &constant_position){
+        // Returns absolute distance to box or -1 if not intersected
         PlaneIntersection pxmin = intersect_plane(r, Vector(pmin[0], 0, 0) + move(time), Vector(1, 0, 0));
         PlaneIntersection pxmax = intersect_plane(r, Vector(pmax[0], 0, 0) + move(time), Vector(1, 0, 0));
         if (pxmin.flag == false){ // same as pxmax.flag==false
@@ -256,10 +257,10 @@ public:
         
         double mint1 = std::min(std::min(t1x, t1y), t1z);
         double maxt0 = std::max(std::max(t0x, t0y), t0z);
-        if (mint1 > maxt0){ // if mint1 < 0 the bounding box is fully behind the ray
-            return true;
+        if (mint1 > maxt0 && mint1 >= 0){ // if mint1 < 0 the bounding box is fully behind the ray
+            return std::min(abs(mint1), abs(maxt0));
         }
-        return false;
+        return -1;
     }
 
     void split_box(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices){
@@ -408,7 +409,10 @@ public:
         while (pile.size()>0){
             BoundingBox* current_box = pile.back();
             pile.pop_back();
-            if (current_box->intersect_box(r, time, movement)){
+            double abs_dist_to_box = current_box->intersect_box(r, time, movement);
+            if (abs_dist_to_box >= 0 && abs_dist_to_box < best_cast.intersect.t){
+                // We consider only "positive" (-1 is no intersection)
+                // We consider only boxes closer than the best intersection found by now
                 if (current_box->is_leaf){
                     Cast current_cast = intersect_aux(r, time, current_box->indexmin, current_box->indexmax);
                     if (current_cast.intersect.flag == true && current_cast.intersect.t < best_cast.intersect.t){
