@@ -72,6 +72,12 @@ Vector cross(const Vector& a, const Vector& b) {
     return Vector(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
 }
 
+void gamma_correction(Vector& color, double correction = 1/2.2){
+    color[0] = std::min((double)255, std::max((double)0, pow(color[0], correction)));
+    color[1] = std::min((double)255, std::max((double)0, pow(color[1], correction)));
+    color[2] = std::min((double)255, std::max((double)0, pow(color[2], correction)));
+}
+
 class Ray {
 public:
     Vector origin;
@@ -158,13 +164,19 @@ Vector throw_movement(double t){
     return Vector(8*tp,25*tp - 20*pow(tp, 2),0);
 }
 
-Intersection triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector normalA, Vector normalB, Vector normalC){
+struct IntersectParam{
+    Intersection intersect;
+    Vector param;
+    IntersectParam(Intersection i, Vector p) : intersect(i), param(p) {}
+};
+
+IntersectParam triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector normalA, Vector normalB, Vector normalC){
     Vector e1 = B-A;
     Vector e2 = C-A;
     Vector N = cross(e1, e2);
     double dotUN = dot(r.unit, N);
     if (dotUN == 0){
-        return Intersection(false, Vector(0,0,0), 0, false, N);
+        return IntersectParam(Intersection(false, Vector(0,0,0), 0, false, N), Vector(-1,-1,-1));
     }
     double beta = dot(e2, cross(A - r.origin, r.unit))/dotUN;
     double gamma = -dot(e1, cross(A - r.origin, r.unit))/dotUN;
@@ -173,9 +185,9 @@ Intersection triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector nor
     if (0<=alpha && alpha<=1 && 0<=beta && beta<=1 && 0<=gamma && gamma<=1 && t>0){
         Vector shading_normal = alpha * normalA + beta * normalB + gamma * normalC;
         shading_normal.normalize();
-        return Intersection(true, A + beta*e1 + gamma*e2, t, false, shading_normal);
+        return IntersectParam(Intersection(true, A + beta*e1 + gamma*e2, t, false, shading_normal), Vector(alpha, beta, gamma));
     }
-    return Intersection(false, Vector(0,0,0), 0, false, Vector(0,0,1));
+    return IntersectParam(Intersection(false, Vector(0,0,0), 0, false, Vector(0,0,1)), Vector(-1,-1,-1));
 }
 
 struct PlaneIntersection{
@@ -357,11 +369,15 @@ public:
 
 class TriangleMesh : public Geometry {
 public:
-    ~TriangleMesh() {}
+    ~TriangleMesh() {
+        stbi_image_free(uv);
+    }
 
     BoundingBox root_box = BoundingBox();
+    unsigned char *uv;
+    int uvx, uvy, n;
 
-    explicit TriangleMesh(const char* obj, Vector ori, double rescale = 1, double refr = -1, Vector (*m)(double) = &constant_position){
+    explicit TriangleMesh(const char* obj, const char* uv_file, Vector ori, double rescale = 1, double refr = -1, Vector (*m)(double) = &constant_position){
         readOBJ(obj);
         origin = ori;
         refraction = -1;
@@ -371,6 +387,11 @@ public:
                 vertices[i] = vertices[i]*rescale;
             }
         }
+        
+        if (stbi_info(uv_file, &uvx, &uvy, &n) == 0){
+            throw "Error loading UV file";
+        }
+        uv = stbi_load(uv_file, &uvx, &uvy, &n, 0);
     }
 
     void refresh_position_ONCE() override {
@@ -400,7 +421,6 @@ public:
     }
 	
     Cast intersect(Ray &r, double time) override {
-        // TODO not visit "farther boxes"
         if (indices.size() == 0){
             return Cast();
         }
@@ -430,17 +450,36 @@ public:
 
     Cast intersect_aux(Ray &r, double time, size_t indexmin, size_t indexmax) {
         TriangleIndices index = indices[indexmin];
-        Intersection best_inter = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+        IntersectParam best_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
         size_t best_index = 0;
         for (size_t i=indexmin+1; i<indexmax; i++){
             index = indices[i];
-            Intersection current_intersect = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
-            if (best_inter.flag == false || (current_intersect.flag == true && current_intersect.t < best_inter.t)){
-                best_inter = current_intersect;
+            IntersectParam current_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+            if (best_interparam.intersect.flag == false || (current_interparam.intersect.flag == true && current_interparam.intersect.t < best_interparam.intersect.t)){
+                best_interparam = current_interparam;
                 best_index = i;
             }
         }
-        return Cast(best_inter, Vector(255, 255, 242), refraction); // TODO update uvs
+
+        if (best_interparam.intersect.flag == true){
+            Vector uv1 = uvs[indices[best_index].uvi];
+            uv1 = Vector(uv1[0] - std::floor(uv1[0]), uv1[1] - std::floor(uv1[1]), 0);
+            Vector uv2 = uvs[indices[best_index].uvj];
+            uv2 = Vector(uv2[0] - std::floor(uv2[0]), uv2[1] - std::floor(uv2[1]), 0);
+            Vector uv3 = uvs[indices[best_index].uvk];
+            uv3 = Vector(uv3[0] - std::floor(uv3[0]), uv3[1] - std::floor(uv3[1]), 0);
+            Vector uv_prop = (best_interparam.param[0]*uv1)+(best_interparam.param[1]*uv2)+(best_interparam.param[2]*uv3);
+            int x_pixel = std::floor(uv_prop[0] * uvx);
+            int y_pixel = std::floor((1-uv_prop[1]) * uvy);
+            unsigned char *pixel = uv + (n * (y_pixel*uvx + x_pixel));
+            Vector color = Vector(pixel[0], pixel[1], pixel[2])/255;
+            gamma_correction(color, 2.2);
+            color = color *255;
+            // GAMMA does NOT correct on bugged triangles
+            return Cast(best_interparam.intersect, color, refraction);
+        }
+        return Cast();
+        //TODO fix uvs
     }
     
 	void readOBJ(const char* obj) {
@@ -618,8 +657,8 @@ public:
 	std::vector<TriangleIndices> indices;
 	std::vector<Vector> vertices;
 	std::vector<Vector> normals;
-	std::vector<Vector> uvs;
-	std::vector<Vector> vertexcolors; // Colors between 0 and 1
+	std::vector<Vector> uvs; // 3rd component always 0 ?
+	std::vector<Vector> vertexcolors; // Colors between 0 and 1 ?
 	
 };
 
@@ -691,12 +730,6 @@ void place_camera_scene(std::vector<Geometry*> &scene, std::vector<Light> &light
     for (size_t i=0; i<lights.size(); i++){
         lights[i].position = lights[i].position - camera_pos;
     }
-}
-
-void gamma_correction(Vector& color){
-    color[0] = std::min((double)255, std::max((double)0, pow(color[0], 1/2.2)));
-    color[1] = std::min((double)255, std::max((double)0, pow(color[1], 1/2.2)));
-    color[2] = std::min((double)255, std::max((double)0, pow(color[2], 1/2.2)));
 }
 
 Vector random_cos(const Vector &N, const double r1i, const double r2i){
@@ -817,7 +850,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 0, int monte_carlo_size = 2, double DOF_dist = 55, double DOF_radius = 0.75){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 0, int monte_carlo_size = 16, double DOF_dist = 55, double DOF_radius = 0.75){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
@@ -894,7 +927,7 @@ int main(){
                                 //new Sphere(Vector(15, -2, 0), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (throw)
                                 new Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
                                 new Sphere(Vector(-10, 0, 15), 5, empty_vec, 1.49),         // left lens
-                                new TriangleMesh("cat.obj", Vector(0, -10, 0), 0.6)
+                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -10, 0), 0.6)
                                 };
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
                                 {Vector(15, 0, -5), 4*1000000}

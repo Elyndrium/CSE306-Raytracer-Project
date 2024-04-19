@@ -7,7 +7,7 @@ TD1: Shadows, mirrors done, transparency too
 
 TD2: indirect lighting, antialiasing, depth of field, motion blur
 
-TD3/4: cat rendered (fix albedo), rescaling function, bvhtree TODO not visit boxes "further" TODO uvs TODO movement support for mesh TODO mirror support for mesh ("inside" bool) TODO refraction set to -1 for mesh (can't define "inside")
+TD3/4: cat rendered (fix albedo), rescaling function, bvhtree not visiting boxes "further" than best intersection found, TODO uvs TODO movement support for mesh
 
 TODO: speed up by reference passing/pointer passing? | optimize random number generation (passing general generator pointer to threads ?) | Check complexity with adding multiple lights/randomly pick lights | compute refraction |stuff within Sphere? | ++i instead of i++ | remove intersection.flag (t is set to Max anyway)?
 TODO: add arguments passing through call instead of recompiling
