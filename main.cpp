@@ -451,7 +451,7 @@ public:
     Cast intersect_aux(Ray &r, double time, size_t indexmin, size_t indexmax) {
         TriangleIndices index = indices[indexmin];
         IntersectParam best_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
-        size_t best_index = 0;
+        size_t best_index = indexmin;
         for (size_t i=indexmin+1; i<indexmax; i++){
             index = indices[i];
             IntersectParam current_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
@@ -475,7 +475,6 @@ public:
             Vector color = Vector(pixel[0], pixel[1], pixel[2])/255;
             gamma_correction(color, 2.2);
             color = color *255;
-            // GAMMA does NOT correct on bugged triangles
             return Cast(best_interparam.intersect, color, refraction);
         }
         return Cast();
@@ -850,7 +849,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 0, int monte_carlo_size = 16, double DOF_dist = 55, double DOF_radius = 0.75){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.75){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
@@ -871,7 +870,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
         r1v[i] = udis(*generator);
         r2v[i] = udis(*generator);
     }
-    double stdev = 0.4; //between 0.25 and 0.5 should be good for 256*256
+    double stdev = 0.7; //between 0.25 and 0.5 should be good for 256*256 ANTIALIASING
     double di, dj, r, theta, t;
     std::uniform_real_distribution<double> r_squared(0, pow(DOF_radius, 2));
     std::uniform_real_distribution<double> theta_gen(0, 2*PI);
