@@ -169,7 +169,7 @@ struct IntersectParam{
     IntersectParam(Intersection i, Vector p) : intersect(i), param(p) {}
 };
 
-IntersectParam triangle_intersect(Vector A, Vector B, Vector C, Ray &r, Vector normalA, Vector normalB, Vector normalC){
+IntersectParam triangle_intersect(const Vector& A, const Vector& B, const Vector& C, Ray &r, const Vector& normalA, const Vector& normalB, const Vector& normalC){
     Vector e1 = B-A;
     Vector e2 = C-A;
     Vector N = cross(e1, e2);
@@ -212,7 +212,7 @@ public:
         delete right_child;
     }
 
-    PlaneIntersection intersect_plane(Ray &r, Vector A, Vector Normal){
+    PlaneIntersection intersect_plane(Ray &r, const Vector& A, const Vector& Normal){
         double dotUN = dot(r.unit, Normal);
         if (abs(dotUN) == 0){
             return PlaneIntersection(false, 0);
@@ -221,7 +221,7 @@ public:
         return PlaneIntersection(true, t);
     }
 
-    double intersect_box(Ray &r, Vector origin){
+    double intersect_box(Ray &r, const Vector& origin){
         // Returns absolute distance to box or -1 if not intersected
         PlaneIntersection pxmin = intersect_plane(r, Vector(pmin[0], 0, 0) + origin, Vector(1, 0, 0));
         PlaneIntersection pxmax = intersect_plane(r, Vector(pmax[0], 0, 0) + origin, Vector(1, 0, 0));
@@ -716,7 +716,7 @@ struct Light{
     int intensity;
 };
 
-void place_camera_scene(std::vector<Geometry*> &scene, std::vector<Light> &lights, Vector camera_pos){
+void place_camera_scene(std::vector<Geometry*> &scene, std::vector<Light> &lights, const Vector& camera_pos){
     for (size_t i=0; i<scene.size(); i++){
         scene[i]->origin = scene[i]->origin - camera_pos;
     }
@@ -764,7 +764,7 @@ Vector random_cos(const Vector &N, const double r1i, const double r2i){
     return V;
 }
 
-Vector normalized_product_element_wise(Vector a, Vector b){
+Vector normalized_product_element_wise(const Vector& a, const Vector& b){
     return Vector(a.data[0] * b.data[0]/255, a.data[1] * b.data[1]/255, a.data[2] * b.data[2]/255);
 }
 
@@ -843,13 +843,12 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.75){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 512, double DOF_dist = 55, double DOF_radius = 0.5){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
     std::uniform_real_distribution<double> udis(0.00001,0.99999);
     double r1, r2;
-    //std::uniform_real_distribution<double> r2dis(std::min((double)j/size_side, 0.00001),std::min((double)(j+1)/size_side, 0.99999));
     int size_side = sqrt(monte_carlo_size);
     for (double i = 0; i<size_side; i++){
         for (double j = 0; j<size_side; j++){
@@ -864,7 +863,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
         r1v[i] = udis(*generator);
         r2v[i] = udis(*generator);
     }
-    double stdev = 0.7; //between 0.25 and 0.5 should be good for 256*256 ANTIALIASING
+    double stdev = 0.8; //between 0.25 and 0.5 should be good for 256*256 ANTIALIASING
     double di, dj, r, theta, t;
     std::uniform_real_distribution<double> r_squared(0, pow(DOF_radius, 2));
     std::uniform_real_distribution<double> theta_gen(0, 2*PI);
@@ -909,17 +908,16 @@ void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, in
 int main(){
     Vector empty_vec = Vector(-1, -1, -1);
     // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
-    std::vector<Geometry*> Scene{//new Sphere(Vector(0,-3,0), 5, Vector(170, 10, 170)),        // center ball
+    std::vector<Geometry*> Scene{new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
                                 new Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 new Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
                                 new Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
                                 new Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
                                 new Sphere(Vector(1000, 0, 0), 940, Vector(255, 0, 255)),   // right pink
                                 new Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
-                                //new Sphere(Vector(12, 15, -5), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
-                                //new Sphere(Vector(15, -2, 0), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (throw)
-                                new Sphere(Vector(-20, 21, -13), 10, empty_vec, 0),         // left mirror
-                                new Sphere(Vector(-10, 0, 15), 5, empty_vec, 1.49),         // left lens
+                                new Sphere(Vector(12, 15, -10), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
+                                new Sphere(Vector(-20, 21, -15), 10, empty_vec, 0),         // left mirror
+                                new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens
                                 new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -10, 0), 0.6)
                                 };
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
@@ -929,8 +927,8 @@ int main(){
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
-    int W = 512;
-    int H = 512;
+    int W = 1024;
+    int H = 1024;
  
     std::vector<unsigned char> image(W * H * 3, 0);
     size_t n_threads = 32;
