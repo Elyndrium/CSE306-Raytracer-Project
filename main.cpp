@@ -145,7 +145,6 @@ class Geometry{
         Vector (*movement)(double);
         double refraction;
         virtual Cast intersect(Ray &r, double time) = 0;
-        virtual void refresh_position_ONCE() = 0;
 };
 
 Vector constant_position(double t){return Vector(0,0,0);}
@@ -222,10 +221,10 @@ public:
         return PlaneIntersection(true, t);
     }
 
-    double intersect_box(Ray &r, double time = 0, Vector (*move)(double) = &constant_position){
+    double intersect_box(Ray &r, Vector origin){
         // Returns absolute distance to box or -1 if not intersected
-        PlaneIntersection pxmin = intersect_plane(r, Vector(pmin[0], 0, 0) + move(time), Vector(1, 0, 0));
-        PlaneIntersection pxmax = intersect_plane(r, Vector(pmax[0], 0, 0) + move(time), Vector(1, 0, 0));
+        PlaneIntersection pxmin = intersect_plane(r, Vector(pmin[0], 0, 0) + origin, Vector(1, 0, 0));
+        PlaneIntersection pxmax = intersect_plane(r, Vector(pmax[0], 0, 0) + origin, Vector(1, 0, 0));
         if (pxmin.flag == false){ // same as pxmax.flag==false
             if (r.origin[0] > pmin[0] && r.origin[0] < pmax[0]){
                 pxmin.t = std::numeric_limits<double>::lowest();
@@ -236,8 +235,8 @@ public:
                 pxmax.t = 0;
             }
         }
-        PlaneIntersection pymin = intersect_plane(r, Vector(0, pmin[1], 0) + move(time), Vector(0, 1, 0));
-        PlaneIntersection pymax = intersect_plane(r, Vector(0, pmax[1], 0) + move(time), Vector(0, 1, 0));
+        PlaneIntersection pymin = intersect_plane(r, Vector(0, pmin[1], 0) + origin, Vector(0, 1, 0));
+        PlaneIntersection pymax = intersect_plane(r, Vector(0, pmax[1], 0) + origin, Vector(0, 1, 0));
         if (pymin.flag == false){
             if (r.origin[0] > pmin[1] && r.origin[0] < pmax[1]){
                 pymin.t = std::numeric_limits<double>::lowest();
@@ -248,8 +247,8 @@ public:
                 pymax.t = 0;
             }
         }
-        PlaneIntersection pzmin = intersect_plane(r, Vector(0,0,pmin[2]) + move(time), Vector(0, 0, 1));
-        PlaneIntersection pzmax = intersect_plane(r, Vector(0,0,pmax[2]) + move(time), Vector(0, 0, 1));
+        PlaneIntersection pzmin = intersect_plane(r, Vector(0,0,pmin[2]) + origin, Vector(0, 0, 1));
+        PlaneIntersection pzmax = intersect_plane(r, Vector(0,0,pmax[2]) + origin, Vector(0, 0, 1));
         if (pzmin.flag == false){
             if (r.origin[0] > pmin[2] && r.origin[0] < pmax[2]){
                 pzmin.t = std::numeric_limits<double>::lowest();
@@ -392,18 +391,12 @@ public:
             throw "Error loading UV file";
         }
         uv = stbi_load(uv_file, &uvx, &uvy, &n, 0);
+        generate_bounding_tree();
     }
 
-    void refresh_position_ONCE() override {
-        place_origin();
+    void generate_bounding_tree() {
         generate_bounding();
         root_box.split_boxes(indices, vertices);
-    }
-
-    void place_origin(){
-        for (size_t i = 0; i<vertices.size(); i++){
-            vertices[i] = vertices[i] + origin;
-        }
     }
 
     void generate_bounding(){
@@ -419,6 +412,8 @@ public:
         root_box.indexmin = 0;
         root_box.indexmax = indices.size();
     }
+
+    Vector vertext(double time, size_t index){return vertices[index] + origin + movement(time);}
 	
     Cast intersect(Ray &r, double time) override {
         if (indices.size() == 0){
@@ -429,7 +424,7 @@ public:
         while (pile.size()>0){
             BoundingBox* current_box = pile.back();
             pile.pop_back();
-            double abs_dist_to_box = current_box->intersect_box(r, time, movement);
+            double abs_dist_to_box = current_box->intersect_box(r, origin + movement(time));
             if (abs_dist_to_box >= 0 && abs_dist_to_box < best_cast.intersect.t){
                 // We consider only "positive" (-1 is no intersection)
                 // We consider only boxes closer than the best intersection found by now
@@ -450,11 +445,11 @@ public:
 
     Cast intersect_aux(Ray &r, double time, size_t indexmin, size_t indexmax) {
         TriangleIndices index = indices[indexmin];
-        IntersectParam best_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+        IntersectParam best_interparam = triangle_intersect(vertext(time, index.vtxi), vertext(time, index.vtxj), vertext(time, index.vtxk), r, normals[index.ni], normals[index.nj], normals[index.nk]);
         size_t best_index = indexmin;
         for (size_t i=indexmin+1; i<indexmax; i++){
             index = indices[i];
-            IntersectParam current_interparam = triangle_intersect(movement(time)+vertices[index.vtxi], movement(time)+vertices[index.vtxj], movement(time)+vertices[index.vtxk], r, normals[index.ni], normals[index.nj], normals[index.nk]);
+            IntersectParam current_interparam = triangle_intersect(vertext(time, index.vtxi), vertext(time, index.vtxj), vertext(time, index.vtxk), r, normals[index.ni], normals[index.nj], normals[index.nk]);
             if (best_interparam.intersect.flag == false || (current_interparam.intersect.flag == true && current_interparam.intersect.t < best_interparam.intersect.t)){
                 best_interparam = current_interparam;
                 best_index = i;
@@ -694,7 +689,6 @@ public:
         if (inside == true){normal = -normal;}
         return Cast(Intersection(true, r.origin + r.unit*t, t, inside, normal), albedo, refraction);
     }
-    void refresh_position_ONCE() override {}
 };
 
 Cast scene_intersect(std::vector<Geometry*> &scene, Ray &r, double t){
@@ -934,10 +928,6 @@ int main(){
     
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
-
-    for (Geometry* object : Scene){
-        object->refresh_position_ONCE();
-    }
 
     int W = 512;
     int H = 512;
