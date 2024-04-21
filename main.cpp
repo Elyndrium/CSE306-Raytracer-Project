@@ -725,15 +725,13 @@ void place_camera_scene(std::vector<Geometry*> &scene, std::vector<Light> &light
     }
 }
 
-Vector random_cos(const Vector &N, const double r1i, const double r2i){
+Vector random_cos(const Vector &N, const double r1i, const double r2i, std::mt19937 *generator){
     double r1;
     double r2;
     if (r1i == -1){
-        std::hash<std::thread::id> hasher;
-        static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
         std::uniform_real_distribution<double> udis(0.00001,0.99999);
-        r1 = udis(generator);
-        r2 = udis(generator);
+        r1 = udis(*generator);
+        r2 = udis(*generator);
     }
     else{
         r1 = r1i;
@@ -768,7 +766,7 @@ Vector normalized_product_element_wise(const Vector& a, const Vector& b){
     return Vector(a.data[0] * b.data[0]/255, a.data[1] * b.data[1]/255, a.data[2] * b.data[2]/255);
 }
 
-Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth, double r1i, double r2i, double t){
+Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, Ray pr, unsigned char reflections_depth, int ray_depth, double r1i, double r2i, double t, std::mt19937 *generator){
     /*
         Only follows one path, has to be sampled multiple times to get good results
     */
@@ -782,7 +780,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
         double dotwin = dot(pr.unit, normal_towards_ray);
         Vector epsilon_above = cast.intersect.position + normal_towards_ray * epsilon;
         if (cast.mirror && (reflections_depth>0)){
-            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t);
+            return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t, generator);
         }
         else if (cast.transp){
             // We always assume the sphere is standing in air
@@ -795,12 +793,10 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
             }
             double k0 = pow((n1 - n2), 2) / pow(n1 + n2, 2);
             double refl_proba = k0 + (1-k0)*pow(1 - abs(dotwin), 5);
-            std::hash<std::thread::id> hasher;
-            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             std::uniform_real_distribution<double> udis(0,1);
-            if (udis(generator) < refl_proba){
+            if (udis(*generator) < refl_proba){
                 // If we actually have reflection, reflect
-                return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t);
+                return get_color_aux(Scene, Lights, Ray(epsilon_above, pr.unit - 2 * dotwin * normal_towards_ray), reflections_depth-1, ray_depth, r1i, r2i, t, generator);
             }
             // End of fresnel
             double n1n2 = n1/n2;
@@ -813,12 +809,12 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
                 cast.mirror = true;
                 cast.refraction = 0;
                 cast.transp = false;
-                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i, t);
+                return get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1i, r2i, t, generator);
             }
             Vector normal_dir = - normal_towards_ray * sqrt(in_sqrt);
             Vector refracted_direction = tangential_dir + normal_dir;
             Ray reflected_ray = Ray(epsilon_after, refracted_direction);
-            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i, t);
+            return get_color_aux(Scene, Lights, reflected_ray, reflections_depth-1, ray_depth, r1i, r2i, t, generator);
         }
         Vector albedo = cast.albedo;
 
@@ -836,14 +832,14 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
 
         // We add indirect lighting
         if (ray_depth > 0){
-            Ray diffuse_bounce = Ray(epsilon_above, random_cos(normal_towards_ray, r1i, r2i));
-            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1, -1, -1, t));
+            Ray diffuse_bounce = Ray(epsilon_above, random_cos(normal_towards_ray, r1i, r2i, generator));
+            color = color + normalized_product_element_wise(albedo, get_color_aux(Scene, Lights, diffuse_bounce, reflections_depth, ray_depth-1, -1, -1, t, generator));
         }
     }
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 3, int monte_carlo_size = 512, double DOF_dist = 55, double DOF_radius = 0.5){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.5){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
@@ -884,7 +880,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
             pr.unit.normalize();
         }
         t = t_gen(*generator);
-        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i], t);
+        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i], t, generator);
     }
     return color/monte_carlo_size;
 }
@@ -895,7 +891,6 @@ void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, in
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
-
 
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
@@ -927,8 +922,8 @@ int main(){
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
 
-    int W = 1024;
-    int H = 1024;
+    int W = 512;
+    int H = 512;
  
     std::vector<unsigned char> image(W * H * 3, 0);
     size_t n_threads = 32;
