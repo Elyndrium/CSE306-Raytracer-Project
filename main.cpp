@@ -856,13 +856,31 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.5){
+struct Settings{
+    int reflections_depth;
+    int ray_depth;
+    int monte_carlo_size;
+    double DOF_dist;
+    double DOF_radius;
+    double antialiasing_strength;
+    Settings() {
+        reflections_depth = 20;
+        ray_depth = 2;
+        monte_carlo_size = 100;
+        DOF_dist = 55;
+        DOF_radius = 0.5;
+        antialiasing_strength = 0.8;
+    }
+    Settings(int refd, int rayd, int MCS, double DOFd, double DOFr, double AS) : reflections_depth(refd), ray_depth(rayd), monte_carlo_size(MCS), DOF_dist(DOFd), DOF_radius(DOFr), antialiasing_strength(AS) {}
+};
+
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, Settings *set){
     Vector color = Vector(0,0,0);
-    std::vector<double> r1v(monte_carlo_size);
-    std::vector<double> r2v(monte_carlo_size);
+    std::vector<double> r1v(set->monte_carlo_size);
+    std::vector<double> r2v(set->monte_carlo_size);
     std::uniform_real_distribution<double> udis(0.00001,0.99999);
     double r1, r2;
-    int size_side = sqrt(monte_carlo_size);
+    int size_side = sqrt(set->monte_carlo_size);
     for (double i = 0; i<size_side; ++i){
         for (double j = 0; j<size_side; ++j){
             r1 = udis(*generator);
@@ -872,24 +890,24 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
         }
     }
     
-    for (int i = pow(size_side, 2); i<monte_carlo_size; ++i){
+    for (int i = pow(size_side, 2); i<set->monte_carlo_size; ++i){
         r1v[i] = udis(*generator);
         r2v[i] = udis(*generator);
     }
-    double stdev = 0.8; //between 0.25 and 0.5 should be good for 256*256 ANTIALIASING
+
     double di, dj, r, theta, t;
-    std::uniform_real_distribution<double> r_squared(0, pow(DOF_radius, 2));
+    std::uniform_real_distribution<double> r_squared(0, pow(set->DOF_radius, 2));
     std::uniform_real_distribution<double> theta_gen(0, 2*PI);
     std::uniform_real_distribution<double> t_gen(0, 1);
     Vector P;
-    for (int i=0; i<monte_carlo_size; ++i){
+    for (int i=0; i<set->monte_carlo_size; ++i){
         r1 = udis(*generator);
         r2 = udis(*generator);
-        di = stdev * sqrt(-2*log(r1)) * cos(2*PI*r2);
-        dj = stdev * sqrt(-2*log(r1)) * sin(2*PI*r2);
+        di = set->antialiasing_strength * sqrt(-2*log(r1)) * cos(2*PI*r2);
+        dj = set->antialiasing_strength * sqrt(-2*log(r1)) * sin(2*PI*r2);
         Ray pr = pixel_ray(W, H, ir+di, jr+dj);
-        if (DOF_dist > 0){
-            P = pr.origin + pr.unit * DOF_dist/abs(pr.unit.data[2]);
+        if (set->DOF_dist > 0){
+            P = pr.origin + pr.unit * set->DOF_dist/abs(pr.unit.data[2]);
             r = sqrt(r_squared(*generator));
             theta = theta_gen(*generator);
             pr.origin = pr.origin + Vector(r*cos(theta), r*sin(theta), 0);
@@ -897,17 +915,17 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
             pr.unit.normalize();
         }
         t = t_gen(*generator);
-        color = color + get_color_aux(Scene, Lights, pr, reflections_depth, ray_depth, r1v[i], r2v[i], t, generator);
+        color = color + get_color_aux(Scene, Lights, pr, set->reflections_depth, set->ray_depth, r1v[i], r2v[i], t, generator);
     }
-    return color/monte_carlo_size;
+    return color/set->monte_carlo_size;
 }
 
-void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image){
+void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image, Settings* set){
     for (size_t i = i0; i < i0+block_size; ++i){
         for (int j = 0; j < W; ++j) {
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
-            Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
+            Vector color = get_color(Scene, Lights, W, H, i, j, &generator, set);
 
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
@@ -917,7 +935,66 @@ void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, in
     }
 }
 
-int main(){
+bool parse_int(int &value, char arg[]){
+    try {
+        value = std::stoi(arg);
+        return true;
+    } catch (...) {
+        std::cerr << "Error occured parsing arguments" << std::endl;
+        return false;
+    }
+}
+
+bool parse_double(double &value, char arg[]){
+    try {
+        value = std::stod(arg);
+        return true;
+    } catch (...) {
+        std::cerr << "Error occured parsing arguments" << std::endl;
+        return false;
+    }
+}
+
+int main(int argc, char* argv[]){
+    Settings set = Settings();
+    int W = 512;
+    int H = 512;
+
+    // Arguments: 
+    std::cout << std::endl;
+    if (argc < 2){std::cout << "Executing with default settings (default hardcoded settings may be very off depending on the scene, consider adjusting them) (run with argument 'help' for help)" << std::endl;}
+    else if (argc == 9){
+        if (!(parse_int(W, argv[1]) && parse_int(H, argv[2]) && parse_int(set.reflections_depth, argv[3]) && parse_int(set.ray_depth, argv[4]) && parse_int(set.monte_carlo_size, argv[5]) && parse_double(set.DOF_dist, argv[6]) && parse_double(set.DOF_radius, argv[7]) && parse_double(set.antialiasing_strength, argv[8]))){
+            std::cout << "Error parsing all 8 arguments 'int Width, int Height, int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
+            return 1;
+        }
+    } else if (argc == 2){
+        std::string arg = argv[1];
+        if (arg == "debug"){
+            set.ray_depth = 1;
+            set.monte_carlo_size = 32;
+            std::cout << "Rendering with configuration: debug" << std::endl;
+        } else if (arg == "render"){
+            set.ray_depth = 4;
+            set.monte_carlo_size = 1024;
+            W = 1024;
+            H = 1024;
+            std::cout << "Rendering with configuration: render" << std::endl;
+        } else if (arg == "help") {
+            std::cout << "Correct use: no arguments or 'str configuration_name' or 'int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
+            std::cout << "\nWidth, Height: the picture's dimensions in pixels (heavy on performance, ~bilinear cost)\nReflections depth: number of refractions and reflections computed before counting the ray as black (heavy on performance only on mirror/lens-intensive scenes)\nRay depth: number of indirect light bounces computed before direct lighting (intensive on perfomance, ~linear cost)\nMonte-carlo size: number of rays on which to average each pixel, reduces noise, PREFER PERFECT SQUARES (heavy on performance, ~linear cost)\nDepth of field distance: distance of the point of focus (no impact on performance)\nDepth of field radius: strength of the depth of field effect (no impact on performance)\nAntialiasing strength: strength of antialiasing effect, may induce blur (no impact on performance)" << std::endl;
+            return 0;
+        } else {
+            std::cout << "Error parsing argument, unknown configuration name: " << argv[1] << std::endl;
+            return 1;
+        }
+    } else {
+        std::cout << "Error parsing arguments. Correct use: no arguments or 'str configuration_name' or 'int Width, int Height, int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Width: " << W << std::endl << "Height: " << H << std::endl << "Reflections depth: " << set.reflections_depth << std::endl << "Ray depth: " << set.ray_depth << std::endl << "Monte-carlo size: " << set.monte_carlo_size << std::endl << "Depth of Field distance: " << set.DOF_dist << std::endl << "Depth of Field radius: " << set.DOF_radius << std::endl << "Antialiasing strength: " << set.antialiasing_strength << std::endl;
+
     Vector empty_vec = Vector(-1, -1, -1);
     // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
     std::vector<Geometry*> Scene{new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
@@ -938,9 +1015,6 @@ int main(){
     
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
-
-    int W = 512;
-    int H = 512;
  
     std::vector<unsigned char> image(W * H * 3, 0);
     size_t n_threads = 32;
@@ -948,14 +1022,14 @@ int main(){
     std::vector<std::thread> threads(n_threads-1);
     
     for (size_t i = 0; i < n_threads-1; ++i) {
-        threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image));
+        threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image), &set);
     }
 
     for (int i = (n_threads-1)*block_size; i < W; ++i){
         for (int j = 0; j < W; ++j) {
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
-            Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
+            Vector color = get_color(Scene, Lights, W, H, i, j, &generator, &set);
 
             gamma_correction(color);
             image[(i * W + j) * 3 + 0] = color.data[0];
@@ -968,12 +1042,12 @@ int main(){
         threads[i].join();
     }
 
-    std::cout << "all threads joined" << std::endl;
     stbi_write_png("image.png", W, H, 3, &image[0], 0);
 
     for (size_t i = 0; i<Scene.size(); ++i){
         delete Scene[i];
     }
- 
+
+    std::cout << "Finished execution" << std::endl;
     return 0;
 }

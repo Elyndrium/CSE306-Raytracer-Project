@@ -9,8 +9,7 @@ TD2: indirect lighting, antialiasing, depth of field, motion blur
 
 TD3/4: cat rendered, rescaling function, bvhtree not visiting boxes "further" than best intersection found, uvs support, movement support for mesh
 
-TODO: remove intersection.flag (t is set to Max anyway)?
-TODO: add arguments passing through call instead of recompiling
+TODO: add arguments passing through call instead of recompiling | add "progression bar"
 TODO: make (SAH) bounding box for spheres too
 TODO: procedural textures, the BRDFs they talk about, the importance sampling stuff
 TODO: fix camera in a lens / lens clipping on wall?
