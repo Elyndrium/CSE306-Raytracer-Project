@@ -818,15 +818,32 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
         }
         Vector albedo = cast.albedo;
 
-        for (size_t k=0; k<Lights.size(); k++){
+        // We ponderate the probability of trying a light by its "strength"
+        std::vector<double> light_strength(Lights.size());
+        double total_strength = 0;
+        for (size_t k = 0; k < Lights.size(); k++){
+            Vector to_light_s = Lights[k].position - cast.intersect.position;
+            light_strength[k] = Lights[k].intensity/(4*PI*(to_light_s).norm2()) * std::max((double)0, dot(normal_towards_ray, to_light_s/to_light_s.norm()));
+            total_strength += light_strength[k];
+        }
+
+        if (total_strength > 0){
+            std::vector<double> light_proba(Lights.size());
+
+            for (size_t k = 0; k < Lights.size(); k++){
+                light_proba[k] = light_strength[k]/total_strength;
+            }
+            
+            std::discrete_distribution<size_t> vector_element(light_proba.begin(), light_proba.end());
+            size_t k = vector_element(*generator);
+
             // First test if there is a shadow
             Vector to_shadow = Lights[k].position - epsilon_above;
             Ray shadow_ray = Ray(epsilon_above, to_shadow);
             Cast shadow_intersection = scene_intersect(Scene, shadow_ray, t);
             if (!shadow_intersection.intersect.flag | (to_shadow.norm2() < (epsilon_above - shadow_intersection.intersect.position).norm2())){
                 // Then add the light to the pixel
-                Vector to_light = Lights[k].position - cast.intersect.position;
-                color = color + ((Lights[k].intensity/(4*PI*(to_light).norm2())) * (albedo/PI) * std::max((double)0, dot(normal_towards_ray, to_light/to_light.norm())));
+                color = color + ((light_strength[k]/light_proba[k]) * (albedo/PI));
             }
         }
 
@@ -839,7 +856,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.5){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 512, double DOF_dist = 55, double DOF_radius = 0.5){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
