@@ -311,11 +311,11 @@ public:
 
         // Quicksort indices in [indexmin, indexmax] according to bounding box and remember splitting index
         size_t pivot = indexmin;
-        for (size_t i = indexmin; i < indexmax; i++){
+        for (size_t i = indexmin; i < indexmax; ++i){
             Vector baryc = (vertices[indices[i].vtxi]+vertices[indices[i].vtxj]+vertices[indices[i].vtxk])/3;
             if (baryc[(int)axis] < position){
                 std::swap(indices[i], indices[pivot]);
-                pivot++;
+                ++pivot;
             }
         }
 
@@ -323,7 +323,7 @@ public:
         left_child = new BoundingBox();
         right_child = new BoundingBox();
 
-        for (size_t i = indexmin; i < pivot; i++){
+        for (size_t i = indexmin; i < pivot; ++i){
             for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
                 left_child->pmin[0] = std::min(left_child->pmin[0], vertex[0]);
                 left_child->pmax[0] = std::max(left_child->pmax[0], vertex[0]);
@@ -333,7 +333,7 @@ public:
                 left_child->pmax[2] = std::max(left_child->pmax[2], vertex[2]);
             }
         }
-        for (size_t i = pivot; i < indexmax; i++){
+        for (size_t i = pivot; i < indexmax; ++i){
             for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
                 right_child->pmin[0] = std::min(right_child->pmin[0], vertex[0]);
                 right_child->pmax[0] = std::max(right_child->pmax[0], vertex[0]);
@@ -382,7 +382,7 @@ public:
         refraction = -1;
         movement = m;
         if (rescale != 1){
-            for (size_t i = 0; i<vertices.size(); i++){
+            for (size_t i = 0; i<vertices.size(); ++i){
                 vertices[i] = vertices[i]*rescale;
             }
         }
@@ -447,7 +447,7 @@ public:
         TriangleIndices index = indices[indexmin];
         IntersectParam best_interparam = triangle_intersect(vertext(time, index.vtxi), vertext(time, index.vtxj), vertext(time, index.vtxk), r, normals[index.ni], normals[index.nj], normals[index.nk]);
         size_t best_index = indexmin;
-        for (size_t i=indexmin+1; i<indexmax; i++){
+        for (size_t i=indexmin+1; i<indexmax; ++i){
             index = indices[i];
             IntersectParam current_interparam = triangle_intersect(vertext(time, index.vtxi), vertext(time, index.vtxj), vertext(time, index.vtxk), r, normals[index.ni], normals[index.nj], normals[index.nk]);
             if (best_interparam.intersect.flag == false || (current_interparam.intersect.flag == true && current_interparam.intersect.t < best_interparam.intersect.t)){
@@ -696,7 +696,7 @@ Cast scene_intersect(std::vector<Geometry*> &scene, Ray &r, double t){
         return Cast();
     }
     Cast best = scene[0]->intersect(r, t);
-    for (size_t i=1; i<scene.size(); i++){
+    for (size_t i=1; i<scene.size(); ++i){
         Cast current_cast = scene[i]->intersect(r, t);
         if (best.intersect.flag == false || (current_cast.intersect.flag == true && current_cast.intersect.t < best.intersect.t)){
             best = current_cast;
@@ -717,10 +717,10 @@ struct Light{
 };
 
 void place_camera_scene(std::vector<Geometry*> &scene, std::vector<Light> &lights, const Vector& camera_pos){
-    for (size_t i=0; i<scene.size(); i++){
+    for (size_t i=0; i<scene.size(); ++i){
         scene[i]->origin = scene[i]->origin - camera_pos;
     }
-    for (size_t i=0; i<lights.size(); i++){
+    for (size_t i=0; i<lights.size(); ++i){
         lights[i].position = lights[i].position - camera_pos;
     }
 }
@@ -821,7 +821,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
         // We ponderate the probability of trying a light by its "strength"
         std::vector<double> light_strength(Lights.size());
         double total_strength = 0;
-        for (size_t k = 0; k < Lights.size(); k++){
+        for (size_t k = 0; k < Lights.size(); ++k){
             Vector to_light_s = Lights[k].position - cast.intersect.position;
             light_strength[k] = Lights[k].intensity/(4*PI*(to_light_s).norm2()) * std::max((double)0, dot(normal_towards_ray, to_light_s/to_light_s.norm()));
             total_strength += light_strength[k];
@@ -830,7 +830,7 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
         if (total_strength > 0){
             std::vector<double> light_proba(Lights.size());
 
-            for (size_t k = 0; k < Lights.size(); k++){
+            for (size_t k = 0; k < Lights.size(); ++k){
                 light_proba[k] = light_strength[k]/total_strength;
             }
             
@@ -856,15 +856,15 @@ Vector get_color_aux(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, 
     return color;
 }
 
-Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 512, double DOF_dist = 55, double DOF_radius = 0.5){
+Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int W, int H, int ir, int jr, std::mt19937 *generator, unsigned char reflections_depth = 20, int ray_depth = 1, int monte_carlo_size = 32, double DOF_dist = 55, double DOF_radius = 0.5){
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(monte_carlo_size);
     std::vector<double> r2v(monte_carlo_size);
     std::uniform_real_distribution<double> udis(0.00001,0.99999);
     double r1, r2;
     int size_side = sqrt(monte_carlo_size);
-    for (double i = 0; i<size_side; i++){
-        for (double j = 0; j<size_side; j++){
+    for (double i = 0; i<size_side; ++i){
+        for (double j = 0; j<size_side; ++j){
             r1 = udis(*generator);
             r2 = udis(*generator);
             r1v[i*size_side + j] = r1*i/size_side + (1-r1)*(i+1)/size_side;
@@ -872,7 +872,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
         }
     }
     
-    for (int i = pow(size_side, 2); i<monte_carlo_size; i++){
+    for (int i = pow(size_side, 2); i<monte_carlo_size; ++i){
         r1v[i] = udis(*generator);
         r2v[i] = udis(*generator);
     }
@@ -882,7 +882,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
     std::uniform_real_distribution<double> theta_gen(0, 2*PI);
     std::uniform_real_distribution<double> t_gen(0, 1);
     Vector P;
-    for (int i=0; i<monte_carlo_size; i++){
+    for (int i=0; i<monte_carlo_size; ++i){
         r1 = udis(*generator);
         r2 = udis(*generator);
         di = stdev * sqrt(-2*log(r1)) * cos(2*PI*r2);
@@ -903,8 +903,8 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
 }
 
 void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image){
-    for (size_t i = i0; i < i0+block_size; i++){
-        for (int j = 0; j < W; j++) {
+    for (size_t i = i0; i < i0+block_size; ++i){
+        for (int j = 0; j < W; ++j) {
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
@@ -947,12 +947,12 @@ int main(){
     size_t block_size = H / n_threads;
     std::vector<std::thread> threads(n_threads-1);
     
-    for (size_t i = 0; i < n_threads-1; i++) {
+    for (size_t i = 0; i < n_threads-1; ++i) {
         threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image));
     }
 
-    for (int i = (n_threads-1)*block_size; i < W; i++){
-        for (int j = 0; j < W; j++) {
+    for (int i = (n_threads-1)*block_size; i < W; ++i){
+        for (int j = 0; j < W; ++j) {
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator);
@@ -964,14 +964,14 @@ int main(){
         }
     }
 
-    for (size_t i = 0; i < n_threads-1; i++){
+    for (size_t i = 0; i < n_threads-1; ++i){
         threads[i].join();
     }
 
     std::cout << "all threads joined" << std::endl;
     stbi_write_png("image.png", W, H, 3, &image[0], 0);
 
-    for (size_t i = 0; i<Scene.size(); i++){
+    for (size_t i = 0; i<Scene.size(); ++i){
         delete Scene[i];
     }
  
