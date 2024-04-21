@@ -869,7 +869,7 @@ struct Settings{
         monte_carlo_size = 100;
         DOF_dist = 55;
         DOF_radius = 0.5;
-        antialiasing_strength = 0.8;
+        antialiasing_strength = 0.7;
     }
     Settings(int refd, int rayd, int MCS, double DOFd, double DOFr, double AS) : reflections_depth(refd), ray_depth(rayd), monte_carlo_size(MCS), DOF_dist(DOFd), DOF_radius(DOFr), antialiasing_strength(AS) {}
 };
@@ -982,14 +982,14 @@ int main(int argc, char* argv[]){
             std::cout << "Rendering with configuration: render" << std::endl;
         } else if (arg == "help") {
             std::cout << "Correct use: no arguments or 'str configuration_name' or 'int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
-            std::cout << "\nWidth, Height: the picture's dimensions in pixels (heavy on performance, ~bilinear cost)\nReflections depth: number of refractions and reflections computed before counting the ray as black (heavy on performance only on mirror/lens-intensive scenes)\nRay depth: number of indirect light bounces computed before direct lighting (intensive on perfomance, ~linear cost)\nMonte-carlo size: number of rays on which to average each pixel, reduces noise, PREFER PERFECT SQUARES (heavy on performance, ~linear cost)\nDepth of field distance: distance of the point of focus (no impact on performance)\nDepth of field radius: strength of the depth of field effect (no impact on performance)\nAntialiasing strength: strength of antialiasing effect, may induce blur (no impact on performance)" << std::endl;
+            std::cout << "\nWidth, Height: the picture's dimensions in pixels, PREFER MULTIPLES OF 32 FOR H (heavy on performance, ~bilinear cost)\nReflections depth: number of refractions and reflections computed before counting the ray as black (heavy on performance only on mirror/lens-intensive scenes)\nRay depth: number of indirect light bounces computed before direct lighting (intensive on perfomance, ~linear cost)\nMonte-carlo size: number of rays on which to average each pixel, reduces noise, PREFER PERFECT SQUARES (heavy on performance, ~linear cost)\nDepth of field distance: distance of the point of focus (no impact on performance)\nDepth of field radius: strength of the depth of field effect (no impact on performance)\nAntialiasing strength: strength of antialiasing effect, may induce blur (no impact on performance)" << std::endl;
             return 0;
         } else {
             std::cout << "Error parsing argument, unknown configuration name: " << argv[1] << std::endl;
             return 1;
         }
     } else {
-        std::cout << "Error parsing arguments. Correct use: no arguments or 'str configuration_name' or 'int Width, int Height, int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
+        std::cout << "Error parsing arguments. " << argc-1 << " arguments. Correct use: no arguments or 'str configuration_name' or 'int Width, int Height, int reflections_depth, int ray_depth, int monte_carlo_size, double DOF_dist, double DOF_radius, double antialiasing_strength'" << std::endl;
         return 1;
     }
 
@@ -1017,15 +1017,18 @@ int main(int argc, char* argv[]){
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
  
     std::vector<unsigned char> image(W * H * 3, 0);
-    size_t n_threads = 32;
-    size_t block_size = H / n_threads;
+    const size_t n_threads = 32;
+    const size_t block_size = H / n_threads;
     std::vector<std::thread> threads(n_threads-1);
     
     for (size_t i = 0; i < n_threads-1; ++i) {
         threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image), &set);
     }
-
-    for (int i = (n_threads-1)*block_size; i < W; ++i){
+    
+    std::cout << "Main thread progress (by steps of 10%):" << std::endl;
+    int max_perten = 0;
+    int lines_count = 0;
+    for (int i = (n_threads-1)*block_size; i < H; ++i){
         for (int j = 0; j < W; ++j) {
             std::hash<std::thread::id> hasher;
             static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
@@ -1036,8 +1039,15 @@ int main(int argc, char* argv[]){
             image[(i * W + j) * 3 + 1] = color.data[1];
             image[(i * W + j) * 3 + 2] = color.data[2];
         }
+        lines_count += 1;
+        int current_perten = (10*lines_count)/(H - ((n_threads-1)*block_size));
+        if (current_perten >= max_perten+1){
+            max_perten = current_perten;
+            std::cout << max_perten * 10 << "%" << std::endl;
+        }
     }
 
+    std::cout << "Main thread joined, waiting for other threads." << std::endl;
     for (size_t i = 0; i < n_threads-1; ++i){
         threads[i].join();
     }
