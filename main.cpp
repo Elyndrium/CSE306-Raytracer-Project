@@ -997,7 +997,7 @@ int main(int argc, char* argv[]){
 
     Vector empty_vec = Vector(-1, -1, -1);
     // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
-    std::vector<Geometry*> Scene{new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
+    std::vector<Geometry*> Scene{/*new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
                                 new Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 new Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
                                 new Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
@@ -1006,8 +1006,8 @@ int main(int argc, char* argv[]){
                                 new Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
                                 new Sphere(Vector(12, 15, -10), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
                                 new Sphere(Vector(-20, 21, -15), 10, empty_vec, 0),         // left mirror
-                                new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens
-                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -10, 0), 0.6)
+                                new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens*/
+                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -15, 0), 1)
                                 };
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
                                 {Vector(15, 0, -5), 4*1000000}
