@@ -8,7 +8,7 @@ run: rebuild
 rebuild: clean build
 
 debug: clean
-	g++ main.cpp -Og -Wall -Wextra -Wpedantic
+	g++ main.cpp -Og -Wall -Wextra -Wpedantic -I .stb_image_write.h
 
 clean:
 	del a.exe

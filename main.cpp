@@ -102,7 +102,7 @@ public:
 
 class TriangleIndices {
 public:
-	TriangleIndices(int vtxi = -1, int vtxj = -1, int vtxk = -1, int ni = -1, int nj = -1, int nk = -1, int uvi = -1, int uvj = -1, int uvk = -1, int group = -1, bool added = false) : vtxi(vtxi), vtxj(vtxj), vtxk(vtxk), uvi(uvi), uvj(uvj), uvk(uvk), ni(ni), nj(nj), nk(nk), group(group) {
+	TriangleIndices(int vtxi = -1, int vtxj = -1, int vtxk = -1, int ni = -1, int nj = -1, int nk = -1, int uvi = -1, int uvj = -1, int uvk = -1, int group = -1) : vtxi(vtxi), vtxj(vtxj), vtxk(vtxk), uvi(uvi), uvj(uvj), uvk(uvk), ni(ni), nj(nj), nk(nk), group(group) {
 	};
 	int vtxi, vtxj, vtxk; // indices within the vertex coordinates array
 	int uvi, uvj, uvk;  // indices within the uv coordinates array
@@ -149,16 +149,103 @@ struct Cast{
     }
 };
 
+class Procedural{
+public:
+    virtual ~Procedural() {}
+    virtual void initialize(std::mt19937* generator) = 0;
+    virtual Vector texture(Vector pos) = 0;
+};
+
+class Perlin : public Procedural {
+public:
+    int dimensions[3];      // "size" of the perlin texture
+    int subdivisions[3];    // number of "cuts" per dimension
+    Vector cube_dim;
+    std::vector<std::vector<std::vector<Vector>>> perlin_random;
+    ~Perlin() override {}
+
+    void initialize(std::mt19937* generator) override {
+        // We need 2 + subdivisions vertices per dimension
+        std::normal_distribution<double> ndis(0.0, 1.0);
+        perlin_random.resize(subdivisions[0]+2);
+        for (int i=0; i<subdivisions[0]+2; ++i){
+            perlin_random[i].resize(subdivisions[1]+2);
+            for (int j=0; j<subdivisions[1]+2; ++j){
+                perlin_random[i][j].resize(subdivisions[2]+2);
+                for (int k=0; k<subdivisions[2]+2; ++k){
+                    Vector random = Vector(ndis(*generator), ndis(*generator), ndis(*generator));
+                    random.normalize();
+                    perlin_random[i][j][k] = random;
+                }
+            }
+        }
+    }
+
+    explicit Perlin(Vector dimv, Vector subsv){
+        for (int i=0; i<3; ++i){
+            dimensions[i] = (int)dimv[i];
+            subdivisions[i] = (int)subsv[i];
+        }
+        cube_dim = Vector((double)dimensions[0]/(subdivisions[0]+1), (double)dimensions[1]/(subdivisions[1]+1), (double)dimensions[2]/(subdivisions[2]+1));
+    }
+
+    double interpolate(double a0, double a1, double w){
+        return (a1 - a0) * (3.0 - w * 2.0) * w * w + a0;
+    }
+
+    Vector texture(Vector position) override {
+
+        Vector pos = Vector(0,0,0);
+        for (int i=0; i<3; ++i){
+            pos[i] = fmod(position[i], dimensions[i]); // Value between 0 and dimensions (should be excluded)
+            if (pos[i] < 0){pos[i] += dimensions[i];}
+        }
+
+        int index[3] {(int)std::floor(pos[0]/cube_dim[0]), (int)std::floor(pos[1]/cube_dim[1]), (int)std::floor(pos[2]/cube_dim[2])}; // of "lower" position of cube
+        Vector lower_cube = Vector(index[0]*cube_dim[0], index[1]*cube_dim[1], index[2]*cube_dim[2]);
+
+        Vector offset[8];
+        bool i0, i1, i2;
+        double dots[8];
+        for (int i=0; i<8; ++i){
+            i0 = i%2;
+            i1 = (i/2)%2;
+            i2 = (i/4)%2;
+            offset[i] = lower_cube + Vector(i0*cube_dim[0], i1*cube_dim[1], i2*cube_dim[2]) - pos;
+            dots[i] = dot(offset[i], perlin_random[index[0]+i0][index[1]+i1][index[2]+i2]);
+        }
+        // 000 ; 100 ; 010 ; 110 ; 001 ; 101 ; 011 ; 111
+        Vector weights = (pos-lower_cube);
+        for (int i=0; i<3; ++i){weights[i] = weights[i]/cube_dim[i];}
+        double xinterp[4] {interpolate(dots[0], dots[1], weights[0]), interpolate(dots[2], dots[3], weights[0]), interpolate(dots[4], dots[5], weights[0]), interpolate(dots[6], dots[7], weights[0])};
+        double yinterp[2] {interpolate(xinterp[0], xinterp[1], weights[1]), interpolate(xinterp[2], xinterp[3], weights[1])};
+        double zinterp = interpolate(yinterp[0], yinterp[1], weights[2]);
+
+        return uvec(255 * (zinterp+1.0)/2.0);
+    }
+};
+
 class Geometry{
     public:
         virtual ~Geometry() {}
         Vector origin;
         Vector (*movement)(double);
         double refraction;
-        virtual Cast intersect(Ray &r, double time) = 0;
+        Procedural* procedural;
+        virtual Cast intersect_r(Ray &r, double time) = 0;
+        Cast intersect(Ray &r, double time){
+            Cast inter = intersect_r(r, time);
+            if (procedural != nullptr && inter.intersect.flag == true){
+                inter.mirror = false;
+                inter.transp = false;
+                inter.refraction = -1;
+                inter.albedo = procedural->texture(inter.intersect.position);
+            }
+            return inter;
+        }
 };
 
-Vector constant_position(double t){return Vector(0,0,0);}
+Vector constant_position(double t){(void)t; return Vector(0,0,0);}
 
 Vector ninja_movement_yellow(double t){
     // Diameter is 6 so movement ~5
@@ -441,8 +528,9 @@ public:
     unsigned char *uv;
     int uvx, uvy, n;
 
-    explicit TriangleMesh(const char* obj, const char* uv_file, Vector ori, double rescale = 1, double refr = -1, Vector (*m)(double) = &constant_position){
+    explicit TriangleMesh(const char* obj, const char* uv_file, Vector ori, double rescale = 1, Vector (*m)(double) = &constant_position, Procedural* proc = nullptr){
         readOBJ(obj);
+        procedural = proc;
         origin = ori;
         refraction = -1;
         movement = m;
@@ -476,7 +564,7 @@ public:
 
     Vector vertext(double time, size_t index){return vertices[index] + origin + movement(time);}
 	
-    Cast intersect(Ray &r, double time) override {
+    Cast intersect_r(Ray &r, double time) override {
         if (indices.size() == 0){
             return Cast();
         }
@@ -534,9 +622,9 @@ public:
             return Cast(best_interparam.intersect, color, refraction);
         }
         return Cast();
-        //TODO fix uvs
     }
-    
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wformat="
 	void readOBJ(const char* obj) {
 
 		char grp[255];
@@ -721,14 +809,15 @@ class Sphere : public Geometry {
 public:
     double radius;
     Vector albedo;
-    explicit Sphere(Vector o, double R, Vector c, double refr = -1, Vector (*m)(double) = &constant_position){
+    explicit Sphere(Vector o, double R, Vector c, double refr = -1, Vector (*m)(double) = &constant_position, Procedural* proc = nullptr){
+        procedural = proc;
         origin = o;
         radius = R;
         albedo = c;
         movement = m;
         refraction = refr;
     }
-    Cast intersect(Ray &r, double time) override {
+    Cast intersect_r(Ray &r, double time) override {
         Vector origint = origin + (*movement)(time);
         Vector omc = r.origin - origint;
         double delta = pow(dot(r.unit, omc), 2) - (dot(omc, omc) - pow(radius, 2));
@@ -1057,25 +1146,26 @@ int main(int argc, char* argv[]){
     std::cout << "Width: " << W << std::endl << "Height: " << H << std::endl << "Reflections depth: " << set.reflections_depth << std::endl << "Ray depth: " << set.ray_depth << std::endl << "Monte-carlo size: " << set.monte_carlo_size << std::endl << "Depth of Field distance: " << set.DOF_dist << std::endl << "Depth of Field radius: " << set.DOF_radius << std::endl << "Antialiasing strength: " << set.antialiasing_strength << std::endl;
 
     Vector empty_vec = Vector(-1, -1, -1);
+    std::vector<Procedural*> procedurals{new Perlin(Vector(100,100,100), Vector(100,130,130))}; // Pattern repeats every multiple of "dimensions". If it intersects an object, set it much lower to get more uniform repetition
+
     // The SHUTTER TIME for motion blur is always 1 (so movement between t=0 and t=1)
-    std::vector<Geometry*> Scene{/*new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
+    std::vector<Geometry*> Scene{new Sphere(Vector(0,-6,0), 3, Vector(170, 10, 170)),        // center ball
                                 new Sphere(Vector(0, 1000, 0), 940, Vector(255, 0, 0)),     // top red
                                 new Sphere(Vector(0, 0, -1000), 940, Vector(0, 255, 0)),    // end green
                                 new Sphere(Vector(0, -1000, 0), 990, Vector(0, 0, 255)),    // bottom blue
                                 new Sphere(Vector(0, 0, 1000), 940, Vector(132, 46, 27)),   // back brown
                                 new Sphere(Vector(1000, 0, 0), 940, Vector(255, 0, 255)),   // right pink
                                 new Sphere(Vector(-1000, 0, 0), 940, Vector(255, 255, 0)),  // left orange
-                                new Sphere(Vector(12, 15, -10), 3, Vector(64, 224, 208), -1, &ninja_movement_yellow),      // small turquoise (ninja)
+                                new Sphere(Vector(11, 15, -10), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (ninja)
                                 new Sphere(Vector(-20, 21, -15), 10, empty_vec, 0),         // left mirror
-                                new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens*/
-                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -15, 0), 1)
+                                new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens
+                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -10, 0), 0.6),
+                                new TriangleMesh("cat.obj", "cat_diff.png", Vector(12, -10, 13), 0.25, &constant_position, procedurals[0])
                                 };
-    std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
-                                {Vector(15, 0, -5), 4*1000000}
+    std::vector<Light> Lights{  {Vector(-10, 20, 40), 4*10000000},
+                                {Vector(20, 3, 15), 3*1000000}
                                 };
-    // 36s on "classical algorithm" with "512 512 20 3 256 0 0 0"
-
-
+    
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
  
     std::vector<unsigned char> image(W * H * 3, 0);
@@ -1085,6 +1175,14 @@ int main(int argc, char* argv[]){
     
     std::cout << "Each " << n_threads << " thread manages " << block_size << " lines, and the main thread " << H - ((n_threads-1)*block_size) << " lines." << std::endl;
 
+    // Initialize procedurals
+    std::hash<std::thread::id> hasher;
+    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
+    for (size_t i=0; i<procedurals.size(); ++i){
+        procedurals[i]->initialize(&generator);
+    }
+
+
     for (size_t i = 0; i < n_threads-1; ++i) {
         threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image), &set);
     }
@@ -1092,8 +1190,6 @@ int main(int argc, char* argv[]){
     std::cout << "Main thread progress (by steps of 10%):" << std::endl;
     int max_perten = 0;
     int lines_count = 0;
-    std::hash<std::thread::id> hasher;
-    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
     for (int i = (n_threads-1)*block_size; i < H; ++i){
         for (int j = 0; j < W; ++j) {
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator, &set);
@@ -1121,6 +1217,9 @@ int main(int argc, char* argv[]){
 
     for (size_t i = 0; i<Scene.size(); ++i){
         delete Scene[i];
+    }
+    for (size_t i = 0; i<procedurals.size(); ++i){
+        delete procedurals[i];
     }
 
     std::cout << "Finished execution" << std::endl;
