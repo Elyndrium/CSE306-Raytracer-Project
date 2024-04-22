@@ -65,12 +65,23 @@ Vector operator*(const Vector& a, const double b) {
 Vector operator/(const Vector& a, const double b) {
     return Vector(a[0] / b, a[1] / b, a[2] / b);
 }
+bool operator==(const Vector& a, const Vector& b){
+    return (a[0] == b[0] && a[1] == b[1] && a[2] == b[2]);
+}
+
+std::ostream& operator<<(std::ostream& os, const Vector& obj) {
+    os << "(" << obj[0] << ", " << obj[1] << ", " << obj[2] << ")";
+    return os;
+}
+
 double dot(const Vector& a, const Vector& b) {
     return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 Vector cross(const Vector& a, const Vector& b) {
     return Vector(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]);
 }
+
+Vector uvec(double x){return Vector(x,x,x);}
 
 void gamma_correction(Vector& color, double correction = 1/2.2){
     color[0] = std::min((double)255, std::max((double)0, pow(color[0], correction)));
@@ -197,6 +208,22 @@ struct PlaneIntersection{
 
 enum class Axis {x=0, y=1, z=2};
 
+void min_vec(Vector &to_min, Vector b){
+    for (int i=0; i<3; ++i){
+        to_min[i] = std::min(to_min[i], b[i]);
+    }
+}
+
+void max_vec(Vector &to_max, Vector b){
+    for (int i=0; i<3; ++i){
+        to_max[i] = std::max(to_max[i], b[i]);
+    }
+}
+
+double surface(Vector dim){
+    return 2 * ((dim[0] * dim[1]) + (dim[1] * dim[2]) + (dim[2] * dim[0]));
+}
+
 class BoundingBox{
 public:
     Vector pmin, pmax;
@@ -205,7 +232,7 @@ public:
     BoundingBox* left_child;
     BoundingBox* right_child;
 
-    BoundingBox(Vector min = Vector(std::numeric_limits<double>::max(),std::numeric_limits<double>::max(),std::numeric_limits<double>::max()), Vector max = Vector(std::numeric_limits<double>::lowest(),std::numeric_limits<double>::lowest(),std::numeric_limits<double>::lowest()), size_t imin = 0, size_t imax = 0, bool leaf = true, BoundingBox* lc = nullptr, BoundingBox* rc = nullptr) : pmin(min), pmax(max), indexmin(imin), indexmax(imax), is_leaf(leaf), left_child(lc), right_child(rc) {}
+    BoundingBox(Vector min = uvec(std::numeric_limits<double>::max()), Vector max = uvec(std::numeric_limits<double>::lowest()), size_t imin = 0, size_t imax = 0, bool leaf = true, BoundingBox* lc = nullptr, BoundingBox* rc = nullptr) : pmin(min), pmax(max), indexmin(imin), indexmax(imax), is_leaf(leaf), left_child(lc), right_child(rc) {}
 
     ~BoundingBox(){
         delete left_child;
@@ -277,43 +304,89 @@ public:
     void split_box(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices){
         if (is_leaf == false){throw "Bounding box with children can't be split";}
         is_leaf = false;
-
+        
         // Find the best split
-        Axis axis;
-        double position;
-        Vector dist = pmax - pmin;
-        if (dist[0] > dist[1] && dist[0] > dist[2]){
-            axis = Axis::x;
-            position = (pmax[0]+pmin[0])/2;
-        }
-        else if (dist[1] > dist[2]){
-            axis = Axis::y;
-            position = (pmax[1]+pmin[1])/2;
-        }
-        else {
-            axis = Axis::z;
-            position = (pmax[2]+pmin[2])/2;
+        Axis best_axis = Axis::x;
+        double best_position = 0;
+        double best_cost = std::numeric_limits<double>::max();
+        
+        const int nbucks = 40;
+        std::vector<Vector[2]> buckets(nbucks);
+        std::vector<size_t> bucket_count(nbucks);
+        std::vector<double> cost(nbucks-1);
+        for (Axis axis : {Axis::x, Axis::y, Axis::z}){
+            // Initialize buckets
+            for (int i=0;i<nbucks;++i){bucket_count[i] = 0;}
+            for (int i=0;i<nbucks;++i){
+                buckets[i][0] = uvec(std::numeric_limits<double>::max());
+                buckets[i][1] = uvec(std::numeric_limits<double>::lowest());
+            }
+            double da = (pmax - pmin)[(int)axis];
+            double pa = pmin[(int)axis];
+            // We put each primitive into a bucket
+            for (size_t i = indexmin; i < indexmax; ++i){
+                Vector baryc = (vertices[indices[i].vtxi]+vertices[indices[i].vtxj]+vertices[indices[i].vtxk])/3;
+                int group = std::floor((baryc[(int)axis] - pa)*(double)nbucks/da);
+                if (group == nbucks) {group = nbucks-1;}
+                ++bucket_count[group];
+                // We update the bucket
+                for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
+                    min_vec(buckets[group][0], vertex);
+                    max_vec(buckets[group][1], vertex);
+                }
+            }
+        
+            // We compute the cost now
+            int count_left = 0;
+            Vector box_left[2] {uvec(std::numeric_limits<double>::max()),uvec(std::numeric_limits<double>::lowest())};
+            for (int i=0; i<nbucks-1; ++i){
+                // Update the bound to all that's left of the split
+                min_vec(box_left[0], buckets[i][0]);
+                max_vec(box_left[1], buckets[i][1]);
+                count_left += bucket_count[i];
+                // We initialize the cost to only the left side
+                cost[i] = count_left * surface(box_left[1] - box_left[0]);
+            }
+            int count_right = 0;
+            Vector box_right[2] {uvec(std::numeric_limits<double>::max()),uvec(std::numeric_limits<double>::lowest())};
+            for (int i=nbucks-1; i>=1; --i){
+                // Update the bound to all that's right of the split
+                min_vec(box_right[0], buckets[i][0]);
+                max_vec(box_right[1], buckets[i][1]);
+                count_right += bucket_count[i];
+                // We complete the cost of the right side
+                cost[i-1] += count_right * surface(box_right[1] - box_right[0]);
+            }
+
+            for (int i=0; i<nbucks-1; ++i){
+                if (cost[i] < best_cost){
+                    best_cost = cost[i];
+                    best_axis = axis;
+                    best_position = pa + (da * (double)(i+1)/nbucks);
+                }
+            }
         }
 
+        
         // Make the bounding box out of the split
         BoundingBox left_first = BoundingBox(pmin, pmax);
         BoundingBox right_first = BoundingBox(pmin, pmax);
-        if (axis == Axis::x){
-            left_first.pmax[0] = position;
-            right_first.pmin[1] = position;
-        } else if (axis == Axis::y){
-            left_first.pmax[1] = position;
-            right_first.pmin[1] = position;
+        if (best_axis == Axis::x){
+            left_first.pmax[0] = best_position;
+            right_first.pmin[1] = best_position;
+        } else if (best_axis == Axis::y){
+            left_first.pmax[1] = best_position;
+            right_first.pmin[1] = best_position;
         } else{
-            left_first.pmax[2] = position;
-            right_first.pmin[2] = position;
+            left_first.pmax[2] = best_position;
+            right_first.pmin[2] = best_position;
         }
 
         // Quicksort indices in [indexmin, indexmax] according to bounding box and remember splitting index
         size_t pivot = indexmin;
         for (size_t i = indexmin; i < indexmax; ++i){
             Vector baryc = (vertices[indices[i].vtxi]+vertices[indices[i].vtxj]+vertices[indices[i].vtxk])/3;
-            if (baryc[(int)axis] < position){
+            if (baryc[(int)best_axis] < best_position){
                 std::swap(indices[i], indices[pivot]);
                 ++pivot;
             }
@@ -325,22 +398,14 @@ public:
 
         for (size_t i = indexmin; i < pivot; ++i){
             for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
-                left_child->pmin[0] = std::min(left_child->pmin[0], vertex[0]);
-                left_child->pmax[0] = std::max(left_child->pmax[0], vertex[0]);
-                left_child->pmin[1] = std::min(left_child->pmin[1], vertex[1]);
-                left_child->pmax[1] = std::max(left_child->pmax[1], vertex[1]);
-                left_child->pmin[2] = std::min(left_child->pmin[2], vertex[2]);
-                left_child->pmax[2] = std::max(left_child->pmax[2], vertex[2]);
+                min_vec(left_child->pmin, vertex);
+                max_vec(left_child->pmax, vertex);
             }
         }
         for (size_t i = pivot; i < indexmax; ++i){
             for (Vector vertex : {vertices[indices[i].vtxi], vertices[indices[i].vtxj], vertices[indices[i].vtxk]}){
-                right_child->pmin[0] = std::min(right_child->pmin[0], vertex[0]);
-                right_child->pmax[0] = std::max(right_child->pmax[0], vertex[0]);
-                right_child->pmin[1] = std::min(right_child->pmin[1], vertex[1]);
-                right_child->pmax[1] = std::max(right_child->pmax[1], vertex[1]);
-                right_child->pmin[2] = std::min(right_child->pmin[2], vertex[2]);
-                right_child->pmax[2] = std::max(right_child->pmax[2], vertex[2]);
+                min_vec(right_child->pmin, vertex);
+                max_vec(right_child->pmax, vertex);
             }
         }
 
@@ -402,12 +467,8 @@ public:
     void generate_bounding(){
         root_box = BoundingBox();
         for (Vector vertex : vertices){
-            root_box.pmin[0] = std::min(root_box.pmin[0], vertex[0]);
-            root_box.pmax[0] = std::max(root_box.pmax[0], vertex[0]);
-            root_box.pmin[1] = std::min(root_box.pmin[1], vertex[1]);
-            root_box.pmax[1] = std::max(root_box.pmax[1], vertex[1]);
-            root_box.pmin[2] = std::min(root_box.pmin[2], vertex[2]);
-            root_box.pmax[2] = std::max(root_box.pmax[2], vertex[2]);
+            min_vec(root_box.pmin, vertex);
+            max_vec(root_box.pmax, vertex);
         }
         root_box.indexmin = 0;
         root_box.indexmax = indices.size();
@@ -729,7 +790,7 @@ Vector random_cos(const Vector &N, const double r1i, const double r2i, std::mt19
     double r1;
     double r2;
     if (r1i == -1){
-        std::uniform_real_distribution<double> udis(0.00001,0.99999);
+        std::uniform_real_distribution<double> udis(0.000001,0.999999);
         r1 = udis(*generator);
         r2 = udis(*generator);
     }
@@ -878,7 +939,7 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
     Vector color = Vector(0,0,0);
     std::vector<double> r1v(set->monte_carlo_size);
     std::vector<double> r2v(set->monte_carlo_size);
-    std::uniform_real_distribution<double> udis(0.00001,0.99999);
+    std::uniform_real_distribution<double> udis(0.000001,0.999999);
     double r1, r2;
     int size_side = sqrt(set->monte_carlo_size);
     for (double i = 0; i<size_side; ++i){
@@ -921,10 +982,10 @@ Vector get_color(std::vector<Geometry*> &Scene, std::vector<Light> &Lights, int 
 }
 
 void concurrent_line(std::vector<Geometry*> Scene, std::vector<Light> Lights, int W, int H, int i0, size_t block_size, std::vector<unsigned char> &image, Settings* set){
+    std::hash<std::thread::id> hasher;
+    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
     for (size_t i = i0; i < i0+block_size; ++i){
         for (int j = 0; j < W; ++j) {
-            std::hash<std::thread::id> hasher;
-            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator, set);
 
             gamma_correction(color);
@@ -972,7 +1033,7 @@ int main(int argc, char* argv[]){
         std::string arg = argv[1];
         if (arg == "debug"){
             set.ray_depth = 1;
-            set.monte_carlo_size = 32;
+            set.monte_carlo_size = 8;
             std::cout << "Rendering with configuration: debug" << std::endl;
         } else if (arg == "render"){
             set.ray_depth = 4;
@@ -1012,7 +1073,8 @@ int main(int argc, char* argv[]){
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 5*10000000},
                                 {Vector(15, 0, -5), 4*1000000}
                                 };
-    
+    // 36s on "classical algorithm" with "512 512 20 3 256 0 0 0"
+
 
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
  
@@ -1021,6 +1083,8 @@ int main(int argc, char* argv[]){
     const size_t block_size = H / n_threads;
     std::vector<std::thread> threads(n_threads-1);
     
+    std::cout << "Each " << n_threads << " thread manages " << block_size << " lines, and the main thread " << H - ((n_threads-1)*block_size) << " lines." << std::endl;
+
     for (size_t i = 0; i < n_threads-1; ++i) {
         threads[i] = std::thread(&concurrent_line, Scene, Lights, W, H, i*block_size, block_size, std::ref(image), &set);
     }
@@ -1028,10 +1092,10 @@ int main(int argc, char* argv[]){
     std::cout << "Main thread progress (by steps of 10%):" << std::endl;
     int max_perten = 0;
     int lines_count = 0;
+    std::hash<std::thread::id> hasher;
+    static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
     for (int i = (n_threads-1)*block_size; i < H; ++i){
         for (int j = 0; j < W; ++j) {
-            std::hash<std::thread::id> hasher;
-            static thread_local std::mt19937 generator = std::mt19937(clock() + hasher(std::this_thread::get_id()));
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator, &set);
 
             gamma_correction(color);
@@ -1050,6 +1114,7 @@ int main(int argc, char* argv[]){
     std::cout << "Main thread joined, waiting for other threads." << std::endl;
     for (size_t i = 0; i < n_threads-1; ++i){
         threads[i].join();
+        std::cout << "thread " << i << " joined" << std::endl;
     }
 
     stbi_write_png("image.png", W, H, 3, &image[0], 0);

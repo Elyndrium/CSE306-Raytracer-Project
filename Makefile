@@ -7,6 +7,9 @@ run: rebuild
 
 rebuild: clean build
 
+debug: clean
+	g++ main.cpp -Og -Wall -Wextra -Wpedantic
+
 clean:
 	del a.exe
 	del image.png
