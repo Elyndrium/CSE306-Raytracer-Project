@@ -1,6 +1,6 @@
 
 build:
-	g++ main.cpp -Ofast -flto -funroll-loops -finline-functions -march=native -Wall
+	g++ main.cpp -Ofast -flto -funroll-loops -finline-functions
 
 run: rebuild
 	a.exe
