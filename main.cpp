@@ -502,7 +502,7 @@ public:
         right_child->indexmax = indexmax;
     }
 
-    void split_boxes(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices, size_t max_meshes = 10){
+    void split_boxes(std::vector<TriangleIndices> &indices, std::vector<Vector> &vertices, size_t max_meshes = 4){
         if (indexmax - indexmin > max_meshes){
             split_box(indices, vertices);
             if (left_child->indexmax == indexmax || right_child->indexmin == indexmin){
