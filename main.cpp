@@ -528,11 +528,14 @@ public:
     unsigned char *uv;
     int uvx, uvy, n;
 
-    explicit TriangleMesh(const char* obj, const char* uv_file, Vector ori, double rescale = 1, Vector (*m)(double) = &constant_position, Procedural* proc = nullptr){
+    explicit TriangleMesh(const char* obj, const char* uv_file, Vector ori, double rescale = 1, Vector (*m)(double) = &constant_position, Procedural* proc = nullptr, bool is_mirror = false){
         readOBJ(obj);
         procedural = proc;
         origin = ori;
         refraction = -1;
+        if (is_mirror == true){
+            refraction = 0;
+        }
         movement = m;
         if (rescale != 1){
             for (size_t i = 0; i<vertices.size(); ++i){
