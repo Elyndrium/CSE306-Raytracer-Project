@@ -1111,12 +1111,12 @@ bool parse_double(double &value, char arg[]){
 }
 
 int main(int argc, char* argv[]){
+    std::chrono::time_point<std::chrono::steady_clock> realstart;
+    realstart = std::chrono::steady_clock::now();
+
     Settings set = Settings();
     int W = 512;
     int H = 512;
-
-    std::chrono::time_point<std::chrono::steady_clock> start;
-    start = std::chrono::steady_clock::now();
 
     // Arguments: 
     std::cout << std::endl;
@@ -1174,7 +1174,7 @@ int main(int argc, char* argv[]){
     std::vector<Light> Lights{  {Vector(-10, 20, 40), 4*10000000},
                                 {Vector(20, 3, 15), 3*1000000}
                                 };
-    
+
     place_camera_scene(Scene, Lights, Vector(0, 0, 55));
  
     std::vector<unsigned char> image(W * H * 3, 0);
@@ -1199,6 +1199,8 @@ int main(int argc, char* argv[]){
     std::cout << "Main thread progress (by steps of 10%):" << std::endl;
     int max_perten = 0;
     int lines_count = 0;
+    std::chrono::time_point<std::chrono::steady_clock> start;
+    start = std::chrono::steady_clock::now();
     for (int i = (n_threads-1)*block_size; i < H; ++i){
         for (int j = 0; j < W; ++j) {
             Vector color = get_color(Scene, Lights, W, H, i, j, &generator, &set);
@@ -1230,6 +1232,6 @@ int main(int argc, char* argv[]){
         delete procedurals[i];
     }
 
-    std::cout << "Finished execution in " << (std::chrono::steady_clock::now() - start).count()/(double)pow(10, 9) << "s" <<  std::endl;
+    std::cout << "Finished execution in total " << (std::chrono::steady_clock::now() - realstart).count()/(double)pow(10, 9) << "s" <<  std::endl;
     return 0;
 }
