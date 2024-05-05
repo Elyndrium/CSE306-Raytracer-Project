@@ -2,7 +2,7 @@
  Coding a simple raytracer in C++
 
 ".obj" meshes loadable using TriangleMesh class. Run with argument "help" for help on using the program.
-Scene is modifiable in "main" function. Example render has been made with arguments ".\a.exe 1024 1024 20 3 1024 55 0.4 0.6"
+Scene is modifiable in "main" function. Example render has been made with arguments ".\render.exe 1024 1024 20 3 1024 55 0.4 0.6"
 
 TD1: Diffuse surfaces, direct lighting and shadows, mirrors, refraction and fresnel
 

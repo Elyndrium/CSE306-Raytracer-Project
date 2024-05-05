@@ -14,8 +14,11 @@
 #include <string>
 #include <stdio.h>
 #include <stdexcept>
+#include <chrono>
 
 #define PI 3.1415926535897932384626433832795028841971693993751058209749445923078164062862089986280348253421170679821
+
+
 
 #if defined (_MSC_VER)  // Visual studio
     #define thread_local __declspec( thread )
@@ -1112,6 +1115,9 @@ int main(int argc, char* argv[]){
     int W = 512;
     int H = 512;
 
+    std::chrono::time_point<std::chrono::steady_clock> start;
+    start = std::chrono::steady_clock::now();
+
     // Arguments: 
     std::cout << std::endl;
     if (argc < 2){std::cout << "Executing with default settings (default hardcoded settings may be very off depending on the scene, consider adjusting them) (run with argument 'help' for help)" << std::endl;}
@@ -1161,6 +1167,7 @@ int main(int argc, char* argv[]){
                                 new Sphere(Vector(11, 15, -10), 3, Vector(64, 224, 208), -1, &throw_movement),      // small turquoise (ninja)
                                 new Sphere(Vector(-20, 21, -15), 10, empty_vec, 0),         // left mirror
                                 new Sphere(Vector(-9, 1, 30), 3.5, empty_vec, 1.49),         // left lens
+                                new Sphere(Vector(-9, -7, 30), 3.5, empty_vec, -1, &constant_position, procedurals[0]),         // left proce
                                 new TriangleMesh("cat.obj", "cat_diff.png", Vector(0, -10, 0), 0.6),
                                 new TriangleMesh("cat.obj", "cat_diff.png", Vector(12, -10, 13), 0.25, &constant_position, procedurals[0])
                                 };
@@ -1205,7 +1212,7 @@ int main(int argc, char* argv[]){
         int current_perten = (10*lines_count)/(H - ((n_threads-1)*block_size));
         if (current_perten >= max_perten+1){
             max_perten = current_perten;
-            std::cout << max_perten * 10 << "%" << std::endl;
+            std::cout << max_perten * 10 << "%, in " << (std::chrono::steady_clock::now() - start).count()/(double)pow(10, 9) << "s" << std::endl;
         }
     }
 
@@ -1223,6 +1230,6 @@ int main(int argc, char* argv[]){
         delete procedurals[i];
     }
 
-    std::cout << "Finished execution" << std::endl;
+    std::cout << "Finished execution in " << (std::chrono::steady_clock::now() - start).count()/(double)pow(10, 9) << "s" <<  std::endl;
     return 0;
 }
