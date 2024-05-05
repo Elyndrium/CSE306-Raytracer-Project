@@ -68,7 +68,6 @@ Vector operator/(const Vector& a, const double b) {
 bool operator==(const Vector& a, const Vector& b){
     return (a[0] == b[0] && a[1] == b[1] && a[2] == b[2]);
 }
-
 std::ostream& operator<<(std::ostream& os, const Vector& obj) {
     os << "(" << obj[0] << ", " << obj[1] << ", " << obj[2] << ")";
     return os;
@@ -1210,10 +1209,9 @@ int main(int argc, char* argv[]){
         }
     }
 
-    std::cout << "Main thread joined, waiting for other threads." << std::endl;
+    std::cout << "Main thread joined, waiting for other threads (may take some time depending on the scene)." << std::endl;
     for (size_t i = 0; i < n_threads-1; ++i){
         threads[i].join();
-        std::cout << "thread " << i << " joined" << std::endl;
     }
 
     stbi_write_png("image.png", W, H, 3, &image[0], 0);

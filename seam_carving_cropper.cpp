@@ -62,20 +62,20 @@ void channel_to_bw (std::vector<std::vector<unsigned int>> channel, ImageVec& im
     }
 }
 
-unsigned char intensity(unsigned char* image, int W, int H, int nChannels, int x, int y){
-    if (0<=x && x<W && 0<=y && y<H){return image[(y * W + x) * nChannels + 0]+image[(y * W + x) * nChannels + 1]+image[(y * W + x) * nChannels + 2];}
+unsigned char intensity(ImageVec& image, int x, int y){
+    if (0<=x && x<image[0].size() && 0<=y && y<image.size()){return image[y][x][0]+image[y][x][1]+image[y][x][2];}
     std::cout << "Value out of bounds (in double intensity)" << std::endl;
     throw "Value out of bounds (in double intensity)";
 }
 
-std::vector<std::vector<unsigned int>> energy_map(unsigned char* image, int W, int H, int nChannels){
+std::vector<std::vector<unsigned int>> energy_map(ImageVec image, int W, int H, int nChannels){
     std::vector<std::vector<unsigned int>> energy_image;
     for (int i = 0; i < H; ++i){
         energy_image.push_back(std::vector<unsigned int>(W));
         for (int j = 0; j < W; ++j) {
             unsigned char energy = 0;
-            if (j>0 && j<W-1){energy += abs(intensity(image, W, H, nChannels, j+1, i) - intensity(image, W, H, nChannels, j-1, i));}
-            if (i>0 && i<H-1){energy += abs(intensity(image, W, H, nChannels, j, i+1) - intensity(image, W, H, nChannels, j, i-1));}
+            if (j>0 && j<W-1){energy += abs(intensity(image, j+1, i) - intensity(image, j-1, i));}
+            if (i>0 && i<H-1){energy += abs(intensity(image, j, i+1) - intensity(image, j, i-1));}
             energy_image[i][j] = energy;
         }
     }
@@ -202,13 +202,13 @@ int main(int argc, char* argv[]){
         Direction dir;
         if (remove_horizontals>0){
             ratio = (double)remove_verticals/(double)remove_horizontals;
-            if (ratio>=initial_ratio){dir = Direction::ver;}
+            if (ratio>=initial_ratio && remove_verticals>0){dir = Direction::ver;}
             else {dir = Direction::hor;}
         } else{
             dir = Direction::ver;
         }
 
-        std::vector<std::vector<unsigned int>> emap = energy_map(image, W, H, nChannels);
+        std::vector<std::vector<unsigned int>> emap = energy_map(new_image, W, H, nChannels);
 
         accumulate(emap, dir); // ver is when we REMOVE verticals
 
